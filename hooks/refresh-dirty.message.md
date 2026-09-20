@@ -1,0 +1,1 @@
+For each file below, using ONLY the content given (do not read any other files), produce a one-sentence context summary and a depends list. Call structured_output exactly once with an entry for every file.
