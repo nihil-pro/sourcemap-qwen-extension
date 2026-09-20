@@ -50,6 +50,6 @@ LOCK_DIR="$(dirname "$ROUTES_FILE")/.refresh.lock"
 (
   mkdir "$LOCK_DIR" 2>/dev/null || exit 0
   trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
-  cd "$ROOT_DIR" && qwen -e none "$prompt" >/dev/null 2>&1
+  cd "$ROOT_DIR" && qwen --openai-logging -e none "$prompt" >/dev/null 2>&1
 ) &
 disown 2>/dev/null || true
