@@ -5,8 +5,8 @@
 # Both are reported on stdout so a hook (or a human) can see what changed structurally.
 
 # Note:
-# if a path is reused between a different file and directory across runs,
-# the old meta is still carried over onto the new node, since matching is by path only. Re-tag it manually if that happens.
+# if a path is reused between a different file and directory across runs, the old meta is still carried over onto the new node,
+# since matching is by path only. Re-tag it manually if that happens.
 
 # Usage: ./sync.sh [root_dir] [output_file]
 #   root_dir     directory to scan (default: ".")
@@ -26,21 +26,18 @@ ROOT_DIR="$(cd "$ROOT_DIR_ARG" && pwd)"
 OUTPUT_PATH="$ROOT_DIR/$OUTPUT_FILE"
 mkdir -p "$(dirname "$OUTPUT_PATH")"
 
-# Old "::meta" blocks are stashed as tiny files under this dir, one per
-# path, so a lookup is a plain file check (works on bash 3.2 — no
-# associative arrays) and "what's left over" after the walk = removed
-# paths. A node at path "a/b" is stored at "$OLD_META_DIR/a/b.node-meta",
+# Old "::meta" blocks are stashed as tiny files under this dir – one per path.
+# So a lookup is a plain file check and "what's left over" after the walk = removed paths.
+# A node at path "a/b" is stored at "$OLD_META_DIR/a/b.node-meta",
 # which can never collide with a child stored at "$OLD_META_DIR/a/b/*",
-# since the child's directory name ("b") differs from the meta file name
-# ("b.node-meta").
+# since the child's directory name ("b") differs from the meta file name ("b.node-meta").
 OLD_META_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sync_routes.XXXXXX")"
 trap 'rm -rf "$OLD_META_DIR"' EXIT
 
 ADDED_LOG="$OLD_META_DIR/.added.log"
 : > "$ADDED_LOG"
 
-# Reverses escape_yaml (backslash and double-quote escaping) so a key
-# captured from the old file matches a real filename again.
+# Reverses escape_yaml (backslash and double-quote escaping) so a key captured from the old file matches a real filename again
 unescape_yaml() {
   local s="$1"
   s="${s//\\\"/\"}"
@@ -48,12 +45,10 @@ unescape_yaml() {
   printf '%s' "$s"
 }
 
-# --- Phase 1: parse the existing output file, if any, into OLD_META_DIR.
-# Walks the file once, tracking the current key stack by indentation (2
-# spaces per level, matching what this tool always emits) so each
-# "::meta" block can be attributed to its full path and captured verbatim
-# — including any content a human or LLM has since added to it, however
-# it's shaped, since capture is purely indentation-bounded.
+# 1: Parse the existing output file, if any, into OLD_META_DIR.
+# Walks the file once, tracking the current key stack by indentation (2 spaces per level, matching what this tool always emits)
+# so each "::meta" block can be attributed to its full path and captured verbatim, including any content a human or LLM has since added to it,
+# however it's shaped, since capture is purely indentation-bounded
 if [[ -f "$OUTPUT_PATH" ]]; then
   old_lines=()
   while IFS= read -r line || [[ -n "$line" ]]; do

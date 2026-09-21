@@ -28,9 +28,8 @@ case "$FILE_PATH" in
   *) exit 0 ;;
 esac
 
-# Skip anything under an ignored directory (node_modules, dist, .qwen,
-# etc.) or a self-describing file — routes.yaml has no node for these
-# anyway, so there'd be nothing to refresh.
+# Skip anything under an ignored directory or a self-describing file
+# routes.yaml has no node for these anyway, so there'd be nothing to refresh
 if declare -F is_ignored >/dev/null 2>&1; then
   IFS='/' read -ra segs <<<"$REL_PATH"
   for seg in "${segs[@]}"; do
@@ -47,8 +46,7 @@ find "$DIRTY_DIR" -maxdepth 1 -name '*.json' -mtime +7 -delete 2>/dev/null || tr
 DIRTY_FILE="$DIRTY_DIR/$SESSION_ID.json"
 [[ -f "$DIRTY_FILE" ]] || printf '{"files":[]}' > "$DIRTY_FILE"
 
-# mkdir is atomic on both macOS and Linux, so it doubles as a cheap lock
-# against a rare concurrent call for the same session.
+# mkdir is atomic on both macOS and Linux, so it doubles as a cheap lock against a rare concurrent call for the same session
 LOCK_DIR="$DIRTY_FILE.lock"
 for _ in $(seq 1 50); do
   mkdir "$LOCK_DIR" 2>/dev/null && break

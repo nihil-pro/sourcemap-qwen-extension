@@ -12,9 +12,9 @@
 # and if it does spawn the scout, that subagent has real tool access rather than being limited to whatever text we could paste inline.
 
 # Once-per-session:
-# the hint only needs to land in the model's context once.
-# Repeating it on every prompt within the same session is pure token cost with no added value, since it's already there.
-# Gated by a marker file per session_id, mkdir-based lock, opportunistic 7-day cleanup of stale markers.
+# the hint only needs to land in the model's context once
+# Repeating it on every prompt within the same session is pure token cost with no added value, since it's already there
+# Gated by a marker file per session_id, mkdir-based lock, opportunistic 7-day cleanup of stale markers
 
 set -uo pipefail
 
@@ -29,9 +29,7 @@ ROUTES_FILE="$ROOT_DIR/${DEFAULT_OUTPUT_FILE:-.qwen/sourcemap/routes.yaml}"
 
 [[ -f "$ROUTES_FILE" ]] || exit 0
 
-# Session-scoped state lives under the project's sourcemap data dir
-# (already .qwen-prefixed, so it's automatically excluded from routes.yaml
-# itself — see lib.sh's IGNORE_EXACT).
+# Session-scoped state lives under the project's sourcemap data dir; so it's automatically excluded from routes.yaml
 STATE_DIR="$ROOT_DIR/.qwen/sourcemap/.hint-sessions"
 mkdir -p "$STATE_DIR"
 find "$STATE_DIR" -maxdepth 1 -name '*.done' -mtime +7 -delete 2>/dev/null || true
@@ -41,8 +39,7 @@ if [[ -n "$SESSION_ID" ]]; then
   if [[ -f "$STATE_FILE" ]]; then
     exit 0
   fi
-  # mkdir is atomic on both macOS and Linux, so it doubles as a cheap
-  # lock against a rare concurrent call for the same session.
+  # mkdir is atomic on both macOS and Linux, so it doubles as a cheap lock against a rare concurrent call for the same session
   LOCK_DIR="$STATE_FILE.lock"
   for _ in $(seq 1 50); do
     mkdir "$LOCK_DIR" 2>/dev/null && break
@@ -52,9 +49,7 @@ if [[ -n "$SESSION_ID" ]]; then
   rmdir "$LOCK_DIR" 2>/dev/null || true
 fi
 
-# The injected hint text lives in prompts/scout-hint.md — plain prompt
-# content, no shell-escaping needed there. Read verbatim; if it's
-# missing, there's nothing to inject.
+# Read verbatim; if it's missing, there's nothing to inject
 CONTEXT_FILE="$SCRIPT_DIR/prompts/scout-hint.md"
 [[ -f "$CONTEXT_FILE" ]] || exit 0
 context="$(cat "$CONTEXT_FILE")"

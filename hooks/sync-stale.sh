@@ -43,10 +43,7 @@ if [[ -n "$SESSION_ID" && -s "$DIRTY_FILE" ]]; then
 fi
 
 if [[ -d "$ROOT_DIR/.git" ]] && command -v git >/dev/null 2>&1; then
-  # True if every path segment is checked against lib.sh's ignore rules —
-  # a change three levels inside node_modules/ is exactly as irrelevant
-  # to routes.yaml as node_modules/ itself, since the tree walk prunes
-  # the whole subtree at the first ignored ancestor.
+  # True if every path segment is checked against lib.sh's ignore rules
   path_is_ignored() {
     local path="$1"
     local seg
@@ -60,7 +57,7 @@ if [[ -d "$ROOT_DIR/.git" ]] && command -v git >/dev/null 2>&1; then
   relevant=false
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
-    # porcelain format: "XY path" ("XY old -> new" for a rename/copy).
+    # porcelain format: "XY path" ("XY old -> new" for a rename/copy)
     path="${line:3}"
     path="${path#*-> }"
     path="${path%\"}"
@@ -74,8 +71,7 @@ if [[ -d "$ROOT_DIR/.git" ]] && command -v git >/dev/null 2>&1; then
   [[ "$relevant" == true || "$has_dirty" == true ]] || exit 0
 fi
 
-# No output_file arg — let sync.sh apply its own default (lib.sh's
-# DEFAULT_OUTPUT_FILE), so this hook never has to duplicate that path.
+# No output_file arg — let sync.sh apply its own default (lib.sh's DEFAULT_OUTPUT_FILE), so this hook never has to duplicate that path
 output="$("$SYNC_SCRIPT" "$ROOT_DIR" 2>&1)" || exit 0
 
 if printf '%s' "$output" | grep -qE '^(Added|Removed)'; then

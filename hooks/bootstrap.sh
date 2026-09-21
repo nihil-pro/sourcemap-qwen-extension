@@ -1,26 +1,11 @@
 #!/usr/bin/env bash
-#
-# bootstrap.sh — SessionStart hook. Its ONLY synchronous work is a file
-# existence check and spawning a background process; it does not run
-# generate.sh itself (that moved into populate.sh — see that script's
-# header). This is deliberate: some qwen-code versions appear to
-# interpret a hook's configured timeout in a different unit than others
-# (observed directly: a hook that legitimately takes low-single-digit
-# seconds gets killed as if the timeout were read in milliseconds), so
-# this hook must return almost instantly regardless of how long
-# generating/populating routes.yaml actually takes — all of that now
-# happens after this hook has already exited.
-#
-# Never overwrites an existing routes.yaml — that's what sync.sh (Stop
-# hook) and refresh-dirty.sh (for individually edited files) are for.
-#
-# The background work is launched via `nohup ... & disown` — the exact
-# pattern sync-stale.sh already uses successfully for
-# refresh-dirty.sh. `nohup` only protects a single external command from
-# SIGHUP, not an inline "(...)" subshell block; an earlier version that
-# backgrounded a subshell directly here was observed getting killed right
-# after this hook's own synchronous portion returned.
+# SessionStart hook
+# Its ONLY synchronous work is a file existence check and spawning a background process,
+# otherwise it could took for a wile in large codebase, and hook will fail with timeout
 
+# Never overwrites an existing routes.yaml. That's what sync.sh and refresh-dirty.sh are for
+
+# The background work is launched via `nohup ... & disown` to protect from SIGHUP an inline "(...)" subshell block as well
 set -uo pipefail
 
 cat >/dev/null  # drain stdin; SessionStart's input isn't needed here
