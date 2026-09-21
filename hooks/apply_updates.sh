@@ -1,20 +1,31 @@
 #!/usr/bin/env bash
-# mechanically rewrites specific node's "context" and "depends" in routes.yaml from a JSON updates file,
-# leaving every other line — including any "dependents" block add-dependents.sh already wrote — untouched.
-
-# The model that produces the updates (refresh_dirty.sh) never touches the YAML directly:
-# it only returns content via --json-schema structured_output,
-# and this script applies it using the same indentation-bounded parsing sync.sh already uses,
-# so a model can't corrupt tree structure or unrelated nodes even if it tried.
 #
-# "depends" is rewritten in the same block-list style add-dependents.sh expects to parse ("depends:\n  - path", or "depends: []"),
-# never as a flow array — matching whatever convention is already in the file so other tooling keeps working.
-
-# A target path with no matching node in routes.yaml is silently skipped — sync.sh already dropped it structurally,
-# so there's nothing to patch.
-
-# "depends" entries are resolved against the real paths already in the map
-
+# apply_updates.sh — mechanically rewrites specific nodes' "context" and
+# "depends" in routes.yaml from a JSON updates file, leaving every other
+# line — including any "dependents" block add-dependents.sh already
+# wrote — untouched. The model that produces the updates (refresh_dirty.sh)
+# never touches the YAML directly: it only returns content via
+# --json-schema structured_output, and this script applies it using the
+# same indentation-bounded parsing sync.sh already uses, so a model can't
+# corrupt tree structure or unrelated nodes even if it tried.
+#
+# "depends" is rewritten in the same block-list style add-dependents.sh
+# expects to parse ("depends:\n  - path", or "depends: []"), never as a
+# flow array — matching whatever convention is already in the file so
+# other tooling keeps working.
+#
+# A target path with no matching node in routes.yaml (e.g. deleted
+# between being marked dirty and this running) is silently skipped —
+# sync.sh already dropped it structurally, so there's nothing to patch.
+#
+# "depends" entries are resolved against the real paths already in the
+# map, trying the extension-stripped form when an exact match fails —
+# models reliably give import-specifier-style paths ("src/app/foo",
+# no ".tsx") regardless of prompt wording, since that's just how JS/TS
+# imports look; fighting that with more instructions is less robust than
+# just resolving it here, the same reasoning as trusting the model for
+# content only and never for YAML structure.
+#
 # Usage: ./apply_updates.sh <root_dir> <updates_json_file> [output_file]
 #   updates_json_file: {"files":[{"path":"a/b.ts","context":"...","depends":["c/d.ts"]}]}
 #   output_file: relative to root_dir (default: lib.sh's DEFAULT_OUTPUT_FILE)
@@ -48,9 +59,9 @@ while IFS= read -r line || [[ -n "$line" ]]; do
 done < "$ROUTES_FILE"
 n=${#old_lines[@]}
 
-# --- Pass 0: build a lookup of every known file path in the map,
-# plus its extension-stripped form, for resolving "depends" entries below.
-# Written to a temp file (path<TAB>noext) rather than a bash associative array,
+# --- Pass 0: build a lookup of every known file path in the map, plus its
+# extension-stripped form, for resolving "depends" entries below. Written
+# to a temp file (path<TAB>noext) rather than a bash associative array,
 # since this must stay bash-3.2-compatible (macOS's default bash).
 LOOKUP_FILE="$(mktemp "${TMPDIR:-/tmp}/apply_updates_lookup.XXXXXX")"
 trap 'rm -f "$LOOKUP_FILE"' EXIT
@@ -132,6 +143,15 @@ patched_count=0
         update="$(jq -c --arg p "$path" '.files[]? | select(.path == $p)' "$UPDATES_JSON")"
         if [[ -n "$update" ]]; then
           new_context="$(jq -r '.context // ""' <<<"$update")"
+          # An empty context is never written back as-is: populate.sh's
+          # enumerate_pending() uses `context: ""` as the sentinel for
+          # "not yet processed" (see its header), so a model that
+          # legitimately has nothing to say about a trivial file would
+          # otherwise be indistinguishable from a node that was never
+          # touched at all, and could get endlessly re-queued by a later
+          # pass. The prompt already tells the model to always give some
+          # description; this is the backstop for when it doesn't.
+          [[ -z "$new_context" ]] && new_context="(no description)"
 
           # Collect the block's lines minus the old "context:" and
           # "depends:" (with its own "- item" lines) — anything left
