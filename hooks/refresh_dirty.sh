@@ -67,7 +67,8 @@ MAX_TOOL_CALLS="${SOURCEMAP_REFRESH_MAX_TOOL_CALLS:-10}"
 LOCK_DIR="$(dirname "$ROUTES_FILE")/.refresh.lock"
 mkdir "$LOCK_DIR" 2>/dev/null || exit 0
 updates_tmp=""
-trap 'rm -f "$updates_tmp"; rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+raw_output_file=""
+trap 'rm -f "$updates_tmp" "$raw_output_file"; rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
 
 # Snapshot and clear this session's dirty list up front, so edits made
 # *during* this refresh (a quick follow-up turn) get queued for next
@@ -109,14 +110,23 @@ system_prompt="$(cat "$SYSTEM_PROMPT_FILE")"
 
 schema='{"type":"object","properties":{"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"context":{"type":"string"},"depends":{"type":"array","items":{"type":"string"}}},"required":["path","context","depends"]}}},"required":["files"]}'
 
-raw_output="$(
-  cd "$ROOT_DIR" && qwen -e none -m "$MODEL" \
+# qwen's stdout is redirected to a FILE, never captured via `$(...)`
+# command substitution. Confirmed by direct, repeated testing: capturing
+# via command substitution (which reads through a pipe) silently
+# truncates qwen's output at exactly 65536 bytes every time — a classic
+# Node.js symptom where an async stdout write to a pipe can get cut short
+# if the process exits before the write flushes, while the same write to
+# a regular file does not have this problem. See populate.sh's header for
+# the full writeup; this hit that script first but applies identically
+# here (a dirty-file batch's transcript easily exceeds 64KB once file
+# content is embedded).
+raw_output_file="$(mktemp "${TMPDIR:-/tmp}/sourcemap_refresh_raw.XXXXXX.json")"
+(cd "$ROOT_DIR" && qwen -e none -m "$MODEL" \
     --system-prompt "$system_prompt" \
     --output-format json \
     --max-tool-calls "$MAX_TOOL_CALLS" \
     --json-schema "$schema" \
-    --prompt "$message" 2>/dev/null
-)"
+    --prompt "$message" >"$raw_output_file" 2>/dev/null)
 [[ $? -eq 0 ]] || exit 0
 
 # --output-format json emits one JSON object per event in an array; the
@@ -125,7 +135,8 @@ raw_output="$(
 # the "fromjson". Confirmed directly against real output; there is no
 # "structured_result" key anywhere in the stream despite the name being
 # a plausible guess.
-files_json="$(printf '%s' "$raw_output" | jq -c '[.[] | select(.type=="result")] | last | .result | fromjson | .files // empty' 2>/dev/null)"
+files_json="$(jq -c '[.[] | select(.type=="result")] | last | .result | fromjson | .files // empty' "$raw_output_file" 2>/dev/null)"
+rm -f "$raw_output_file"
 [[ -n "$files_json" && "$files_json" != "null" ]] || exit 0
 
 updates_tmp="$(mktemp "${TMPDIR:-/tmp}/sourcemap_updates.XXXXXX.json")"
