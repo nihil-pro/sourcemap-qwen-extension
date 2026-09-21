@@ -1,44 +1,38 @@
 #!/usr/bin/env bash
 #
 # populate.sh — first-time background population of routes.yaml, launched
-# by bootstrap.sh once the skeleton exists (generate.sh already ran
-# synchronously before this is spawned).
+# by bootstrap.sh once a session starts and the file doesn't exist yet.
+# Also runs generate.sh itself now (moved out of bootstrap.sh — see that
+# script's header for why the SessionStart hook needs to stay
+# near-instant and can't run it synchronously anymore).
 #
-# Mirrors refresh_dirty.sh's architecture exactly: the model is asked for
-# {path, context, depends} data only, via --json-schema structured_output,
-# over every node that still carries an empty ::meta block — it never
-# touches routes.yaml directly. apply_updates.sh applies the result
-# mechanically afterward, then add-dependents.sh recomputes the reverse
-# "dependents" graph. This needs no write or shell-execution tools, and
-# therefore no --approval-mode override: the model is free to spawn
-# subagents (the "agent" tool) to parallelize reading a large tree, but
-# nothing anywhere in that chain can ever edit a file or run a command —
-# that's what the default (non-yolo) approval mode already guarantees,
-# regardless of what the prompt says.
+# Processes the tree in BATCHES of SOURCEMAP_POPULATE_BATCH_SIZE nodes
+# (default 10) — files first, then directories deepest-first — rather
+# than asking for the whole project in one structured_output call.
+# Confirmed directly: on anything beyond a small project, asking for
+# everything at once degrades badly (the model either never calls
+# structured_output at all, or the answer is too large/low-quality).
+# Directories run after every batch of files because a directory's
+# context is a rollup of its children's, read back from routes.yaml
+# after earlier batches have already applied their content — sorting
+# directories deepest-first (by path depth) and applying each batch
+# before starting the next guarantees a directory is never summarized
+# before all of its children have been.
 #
-# This replaces an earlier version that asked the model to edit
-# routes.yaml and run generate.sh/add-dependents.sh directly, which
-# required `--approval-mode yolo` (full unattended auto-approve for an
-# unsupervised background process) purely so those tool calls wouldn't be
-# silently dropped. Structured-output-only avoids that risk entirely
-# instead of accepting it.
-#
-# Known limitation: this asks for the WHOLE tree's data in a single
-# structured_output call. Fine for small/medium projects (tested); a very
-# large tree could exceed context/output limits before hitting a safety
-# problem. Not solved here — batch this the way refresh_dirty.sh batches
-# dirty files if it becomes an issue.
-#
-# Split out from bootstrap.sh specifically so the whole thing can be
-# launched as a single `nohup ./populate.sh ... & disown` command,
-# mirroring hook_sync_on_stop.sh's proven-working spawn of
-# refresh_dirty.sh.
+# Mirrors refresh_dirty.sh's architecture: each batch call asks for
+# {path, context, depends} only, via --json-schema structured_output,
+# and never touches routes.yaml directly — apply_updates.sh applies the
+# result mechanically after every batch, and add-dependents.sh
+# recomputes the reverse "dependents" graph once at the very end. This
+# needs no write or shell-execution tools, and therefore no
+# --approval-mode override — full auto-approve was tried and rejected
+# earlier specifically because it grants an unsupervised background
+# process more than this task needs.
 #
 # CRITICAL #1: prompts are passed via --system-prompt/--prompt, never as
 # a bare positional argument. Confirmed by direct testing: a positional
-# prompt containing a "#" character anywhere (e.g. this task's own
-# markdown headings) makes qwen's CLI parsing silently misread it and
-# fail with "No input provided via stdin".
+# prompt containing a "#" character anywhere makes qwen's CLI parsing
+# silently misread it and fail with "No input provided via stdin".
 #
 # CRITICAL #2: qwen's stdout is redirected to a FILE, never captured via
 # `$(...)` command substitution. Confirmed by direct, repeated testing:
@@ -46,11 +40,7 @@
 # silently truncates qwen's output at exactly 65536 bytes every time —
 # a classic Node.js symptom, where an async stdout write to a pipe can
 # get cut short if the process exits before the write flushes, while the
-# same write to a regular file does not have this problem. The truncated
-# JSON cuts off mid-stream, so the final "result" event (usually the
-# last and largest thing written) is frequently missing or malformed,
-# which is what was silently causing files_json to come back empty on
-# every attempt despite the model completing successfully.
+# same write to a regular file does not have this problem.
 #
 # Usage: ./populate.sh <root_dir>
 
@@ -62,69 +52,171 @@ LIB_SCRIPT="$SCRIPT_DIR/lib.sh"
 [[ -f "$LIB_SCRIPT" ]] && source "$LIB_SCRIPT"
 
 ROUTES_FILE="$ROOT_DIR/${DEFAULT_OUTPUT_FILE:-.qwen/sourcemap/routes.yaml}"
-[[ -f "$ROUTES_FILE" ]] || exit 0
 
-SYSTEM_PROMPT_FILE="$SCRIPT_DIR/bootstrap.system.md"
-MESSAGE_FILE="$SCRIPT_DIR/bootstrap.md"
-[[ -f "$SYSTEM_PROMPT_FILE" && -f "$MESSAGE_FILE" ]] || exit 0
-
+# Lock acquired BEFORE generate.sh runs (not after): bootstrap.sh spawns
+# this unconditionally whenever routes.yaml is missing, so two sessions
+# starting close together could both spawn a populate.sh before either
+# has created the file. Locking first means only one instance ever gets
+# past this line; the other exits immediately instead of both running
+# generate.sh redundantly.
 LOCK_DIR="$(dirname "$ROUTES_FILE")/.refresh.lock"
 mkdir "$LOCK_DIR" 2>/dev/null || exit 0
 updates_tmp=""
 raw_output_file=""
 trap 'rm -f "$updates_tmp" "$raw_output_file"; rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
 
-system_prompt="$(cat "$SYSTEM_PROMPT_FILE")"
-message="$(cat "$MESSAGE_FILE")"
+GENERATE_SCRIPT="$SCRIPT_DIR/generate.sh"
+if [[ ! -f "$ROUTES_FILE" ]]; then
+  [[ -x "$GENERATE_SCRIPT" ]] || exit 0
+  "$GENERATE_SCRIPT" "$ROOT_DIR" >/dev/null 2>&1 || exit 0
+fi
+[[ -f "$ROUTES_FILE" ]] || exit 0
 
-schema='{"type":"object","properties":{"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"context":{"type":"string"},"depends":{"type":"array","items":{"type":"string"}}},"required":["path","context","depends"]}}},"required":["files"]}'
-
-# No -m/model flag (uses the session's own configured default — this pass
-# needs to reason about the whole project, not just narrow extraction)
-# and no --max-tool-calls cap (may need to read most of the project and
-# spawn several subagents per bootstrap.md's "Execution" section).
-#
-# Retried up to 3 attempts: observed directly that the model sometimes
-# finishes a turn without ever calling structured_output (or emits a
-# non-JSON final answer), especially on a small/fast model — the run
-# still exits 0, "result" just isn't parseable JSON, so fromjson fails
-# and files_json below comes back empty. Since bootstrap.sh only
-# re-populates when routes.yaml is MISSING (not when it exists but is
-# still blank), a single silent failure here would otherwise leave the
-# map permanently empty with nothing to retry it later.
-files_json=""
-for attempt in 1 2 3; do
-  raw_output_file="$(mktemp "${TMPDIR:-/tmp}/sourcemap_populate_raw.XXXXXX.json")"
-  (cd "$ROOT_DIR" && qwen -e none \
-      --system-prompt "$system_prompt" \
-      --output-format json \
-      --json-schema "$schema" \
-      --prompt "$message" >"$raw_output_file" 2>/dev/null)
-  qwen_exit=$?
-  if [[ $qwen_exit -eq 0 ]]; then
-    # --output-format json emits one JSON object per event in an array;
-    # the final "result"-type event's own "result" field is the
-    # structured_output answer, but re-encoded as a JSON STRING (not a
-    # nested object) — hence the "fromjson". Confirmed directly against
-    # real output; there is no "structured_result" key anywhere in the
-    # stream despite the name being a plausible guess.
-    files_json="$(jq -c '[.[] | select(.type=="result")] | last | .result | fromjson | .files // empty' "$raw_output_file" 2>/dev/null)"
-  fi
-  rm -f "$raw_output_file"
-  [[ -n "$files_json" && "$files_json" != "null" ]] && break
-  files_json=""
-done
-[[ -n "$files_json" ]] || exit 0
-
-updates_tmp="$(mktemp "${TMPDIR:-/tmp}/sourcemap_populate.XXXXXX.json")"
-jq -n --argjson files "$files_json" '{files: $files}' > "$updates_tmp"
+RULES_FILE="$SCRIPT_DIR/bootstrap.md"
+SYSTEM_PROMPT_FILE="$SCRIPT_DIR/bootstrap.system.md"
+[[ -f "$RULES_FILE" && -f "$SYSTEM_PROMPT_FILE" ]] || exit 0
 
 APPLY_SCRIPT="$SCRIPT_DIR/apply_updates.sh"
-if [[ -x "$APPLY_SCRIPT" ]]; then
-  "$APPLY_SCRIPT" "$ROOT_DIR" "$updates_tmp" >/dev/null 2>&1 || true
-fi
-
 ADD_DEPENDENTS_SCRIPT="$SCRIPT_DIR/add-dependents.sh"
+[[ -x "$APPLY_SCRIPT" ]] || exit 0
+
+BATCH_SIZE="${SOURCEMAP_POPULATE_BATCH_SIZE:-10}"
+system_prompt="$(cat "$SYSTEM_PROMPT_FILE")"
+rules="$(cat "$RULES_FILE")"
+schema='{"type":"object","properties":{"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"context":{"type":"string"},"depends":{"type":"array","items":{"type":"string"}}},"required":["path","context","depends"]}}},"required":["files"]}'
+
+unescape_yaml() {
+  local s="$1"
+  s="${s//\\\"/\"}"
+  s="${s//\\\\/\\}"
+  printf '%s' "$s"
+}
+
+# Walks routes.yaml with the same indentation-tracked stack apply_updates.sh
+# and add-dependents.sh already use for this exact layout (not
+# centralized into a shared helper — this codebase already duplicates
+# this snippet per-script rather than adding an extra process hop for
+# it). Prints "file\t<depth>\t<path>" or "dir\t<depth>\t<path>" for every
+# node whose ::meta block still has an empty context.
+enumerate_pending() {
+  local old_lines=() line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    old_lines+=("$line")
+  done < "$ROUTES_FILE"
+  local n=${#old_lines[@]}
+  local stack=() i=0
+  while [[ $i -lt $n ]]; do
+    line="${old_lines[$i]}"
+    if [[ "$line" =~ ^([[:space:]]*)\"([^\"]*)\":(.*)$ ]]; then
+      local spaces="${BASH_REMATCH[1]}" key="${BASH_REMATCH[2]}"
+      local depth=$(( ${#spaces} / 2 ))
+      if [[ "$key" == "::meta" && $depth -eq ${#stack[@]} ]]; then
+        local block_indent=${#spaces}
+        local path parent_depth
+        path="$(IFS=/; echo "${stack[*]}")"
+        parent_depth=${#stack[@]}
+        local j=$(( i + 1 )) is_empty=0 has_depends=0
+        while [[ $j -lt $n ]]; do
+          local next="${old_lines[$j]}"
+          if [[ -z "$next" ]]; then j=$(( j + 1 )); continue; fi
+          [[ "$next" =~ ^([[:space:]]*) ]]
+          local next_spaces=${#BASH_REMATCH[1]}
+          [[ $next_spaces -le $block_indent ]] && break
+          [[ "$next" =~ ^[[:space:]]*context:\ \"\"[[:space:]]*$ ]] && is_empty=1
+          [[ "$next" =~ ^[[:space:]]*depends: ]] && has_depends=1
+          j=$(( j + 1 ))
+        done
+        if [[ $is_empty -eq 1 ]]; then
+          if [[ $has_depends -eq 1 ]]; then
+            printf 'file\t%d\t%s\n' "$parent_depth" "$path"
+          else
+            printf 'dir\t%d\t%s\n' "$parent_depth" "$path"
+          fi
+        fi
+        i=$j
+        continue
+      elif [[ "$key" != "::meta" ]]; then
+        stack=("${stack[@]:0:$depth}")
+        stack[$depth]="$(unescape_yaml "$key")"
+      fi
+    fi
+    i=$(( i + 1 ))
+  done
+}
+
+# Runs one batch: $1 = "FILES" or "DIRECTORIES" (task label for the
+# message), $2 = newline-separated list of paths. Applies the batch's
+# results immediately on success; a failed batch (after retries) is
+# simply skipped — its nodes stay empty and will be picked up by the
+# next bootstrap.sh run (routes.yaml existing-but-partially-blank is
+# fine; only a fully-missing file triggers another populate.sh pass, so
+# a stuck batch would need a manual retry today — acceptable for a
+# first-time bootstrap, not worth over-engineering further here).
+run_batch() {
+  local task_label="$1" path_list="$2"
+  local message
+  message="$(printf 'Process exactly these %s:\n%s\n\n%s' "$task_label" "$path_list" "$rules")"
+
+  local files_json="" attempt
+  for attempt in 1 2 3; do
+    raw_output_file="$(mktemp "${TMPDIR:-/tmp}/sourcemap_populate_raw.XXXXXX.json")"
+    (cd "$ROOT_DIR" && qwen -e none \
+        --system-prompt "$system_prompt" \
+        --output-format json \
+        --json-schema "$schema" \
+        --prompt "$message" >"$raw_output_file" 2>/dev/null)
+    local qwen_exit=$?
+    if [[ $qwen_exit -eq 0 ]]; then
+      # --output-format json emits one JSON object per event in an
+      # array; the final "result"-type event's own "result" field is the
+      # structured_output answer, re-encoded as a JSON STRING (not a
+      # nested object) — hence the "fromjson".
+      files_json="$(jq -c '[.[] | select(.type=="result")] | last | .result | fromjson | .files // empty' "$raw_output_file" 2>/dev/null)"
+    fi
+    rm -f "$raw_output_file"
+    raw_output_file=""
+    [[ -n "$files_json" && "$files_json" != "null" ]] && break
+    files_json=""
+  done
+  [[ -n "$files_json" ]] || return 0
+
+  updates_tmp="$(mktemp "${TMPDIR:-/tmp}/sourcemap_populate.XXXXXX.json")"
+  jq -n --argjson files "$files_json" '{files: $files}' > "$updates_tmp"
+  "$APPLY_SCRIPT" "$ROOT_DIR" "$updates_tmp" >/dev/null 2>&1 || true
+  rm -f "$updates_tmp"
+  updates_tmp=""
+}
+
+batch_and_run() {
+  local task_label="$1"
+  local -a paths=()
+  local line
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && paths+=("$line")
+  done
+
+  local total=${#paths[@]}
+  [[ $total -gt 0 ]] || return 0
+
+  local start=0
+  while [[ $start -lt $total ]]; do
+    local end=$(( start + BATCH_SIZE ))
+    [[ $end -gt $total ]] && end=$total
+    local batch_list=""
+    local k
+    for (( k = start; k < end; k++ )); do
+      batch_list="$batch_list${paths[$k]}"$'\n'
+    done
+    run_batch "$task_label" "$batch_list"
+    start=$end
+  done
+}
+
+# Files first (any order — no ordering dependency among them), then
+# directories deepest-first (field 2 is depth; numeric-descending sort).
+enumerate_pending | awk -F'\t' '$1=="file"{print $3}' | batch_and_run "FILES"
+enumerate_pending | awk -F'\t' '$1=="dir"{print $2"\t"$3}' | sort -t $'\t' -k1,1nr | cut -f2 | batch_and_run "DIRECTORIES"
+
 if [[ -x "$ADD_DEPENDENTS_SCRIPT" ]]; then
   "$ADD_DEPENDENTS_SCRIPT" "$ROOT_DIR" >/dev/null 2>&1 || true
 fi
