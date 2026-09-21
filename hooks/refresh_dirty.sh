@@ -1,27 +1,48 @@
 #!/usr/bin/env bash
-# Refreshes ::meta for files marked dirty by mark_dirty.sh this session, then recomputes the "dependents" graph.
-
-# Spawned in the BACKGROUND (detached, non-blocking) by hook_sync_on_stop.sh once structural sync is done,
-# so it never delays the user's turn — see that script for the launch side.
-
-# Runs with `qwen -e none` — NOT --safe-mode.
-# Hooks apply to *any* qwen invocation in this project,
-# so something must stop this nested invocation from re-triggering our own SessionStart/UserPromptSubmit/Stop hooks — unbounded recursive process spawning otherwise.
-# `-e none` disables this extension specifically, which is both sufficient and narrower than --safe-mode:
-# it leaves skills/MCP/ QWEN.md intact, which --safe-mode would strip and which this pass can genuinely use.
-# Verified directly: a nested `-e none` invocation shows zero routes-* hook firings and no sourcemap-scout in its agent list.
-
-# The model is asked for *content only*, via --json-schema structured_output,
-# and never touches routes.yaml directly — that's applied mechanically by apply_updates.sh afterward.
-# This is deliberate: a model can mis-format YAML in ways that are individually plausible but break the file;
-# asking it only for {path, context, depends} and patching those exact fields ourselves means it structurally cannot corrupt the tree even if it wanted to.
-
-# Guarded by a project-wide lock (not just per-session):
-# multiple interactive sessions against the same project could each trigger a refresh,
-# and without a lock two concurrent runs writing routes.yaml could race and silently lose one's update.
-# A run that can't acquire the lock exits without clearing the session's dirty list,
-# so those files stay queued and get picked up next time this session's Stop hook fires.
-
+#
+# refresh_dirty.sh — refreshes ::meta (context/depends) for files marked
+# dirty by mark_dirty.sh this session, then recomputes the "dependents"
+# graph. Spawned in the BACKGROUND (detached, non-blocking) by
+# hook_sync_on_stop.sh once structural sync is done, so it never delays
+# the user's turn — see that script for the launch side.
+#
+# Runs with `qwen -e none` — NOT --safe-mode. Hooks apply to *any* qwen
+# invocation in this project (same risk documented in
+# prompt_boundaries.sh's header), so something must stop this nested
+# invocation from re-triggering our own SessionStart/UserPromptSubmit/Stop
+# hooks — unbounded recursive process spawning otherwise. `-e none`
+# disables this extension specifically (hooks *and* agents), which is
+# both sufficient and narrower than --safe-mode: it leaves skills/MCP/
+# QWEN.md intact, which --safe-mode would strip and which this pass can
+# genuinely use. Verified directly (see prior investigation): a nested
+# `-e none` invocation shows zero routes-* hook firings and no
+# sourcemap-scout in its agent list.
+#
+# The model is asked for *content only*, via --json-schema
+# structured_output, and never touches routes.yaml directly — that's
+# applied mechanically by apply_updates.sh afterward. This is deliberate:
+# a model can mis-format YAML in ways that are individually plausible but
+# break the file; asking it only for {path, context, depends} and
+# patching those exact fields ourselves means it structurally cannot
+# corrupt the tree even if it wanted to.
+#
+# Guarded by a project-wide lock (not just per-session): multiple
+# interactive sessions against the same project could each trigger a
+# refresh, and without a lock two concurrent runs writing routes.yaml
+# could race and silently lose one's update. A run that can't acquire the
+# lock exits without clearing the session's dirty list, so those files
+# stay queued and get picked up next time this session's Stop hook fires.
+#
+# CRITICAL: the message is passed via --prompt, never as a bare
+# positional argument. Confirmed by direct testing: a positional prompt
+# containing a "#" character anywhere makes qwen's CLI parsing silently
+# misread it and fail with "No input provided via stdin" — and since
+# $message embeds the full raw content of every dirty file, a "#"
+# appearing ANYWHERE in ANY of them (Python/shell/Ruby comments, CSS hex
+# colors, a markdown heading, ...) would have silently broken this. Our
+# own test files happened not to contain one, which is why this passed
+# earlier testing despite the bug being present the whole time.
+#
 # Usage: ./refresh_dirty.sh <root_dir> <session_id>
 
 set -uo pipefail
@@ -94,7 +115,7 @@ raw_output="$(
     --output-format json \
     --max-tool-calls "$MAX_TOOL_CALLS" \
     --json-schema "$schema" \
-    "$message" 2>/dev/null
+    --prompt "$message" 2>/dev/null
 )"
 [[ $? -eq 0 ]] || exit 0
 
