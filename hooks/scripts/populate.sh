@@ -19,9 +19,9 @@
 # before starting the next guarantees a directory is never summarized
 # before all of its children have been.
 #
-# Mirrors refresh_dirty.sh's architecture: each batch call asks for
+# Mirrors refresh-dirty.sh's architecture: each batch call asks for
 # {path, context, depends} only, via --json-schema structured_output,
-# and never touches routes.yaml directly — apply_updates.sh applies the
+# and never touches routes.yaml directly — apply-updates.sh applies the
 # result mechanically after every batch, and add-dependents.sh
 # recomputes the reverse "dependents" graph once at the very end. This
 # needs no write or shell-execution tools, and therefore no
@@ -72,11 +72,11 @@ if [[ ! -f "$ROUTES_FILE" ]]; then
 fi
 [[ -f "$ROUTES_FILE" ]] || exit 0
 
-RULES_FILE="$SCRIPT_DIR/bootstrap.md"
-SYSTEM_PROMPT_FILE="$SCRIPT_DIR/bootstrap.system.md"
+RULES_FILE="$SCRIPT_DIR/../prompts/bootstrap.md"
+SYSTEM_PROMPT_FILE="$SCRIPT_DIR/../prompts/bootstrap-system.md"
 [[ -f "$RULES_FILE" && -f "$SYSTEM_PROMPT_FILE" ]] || exit 0
 
-APPLY_SCRIPT="$SCRIPT_DIR/apply_updates.sh"
+APPLY_SCRIPT="$SCRIPT_DIR/apply-updates.sh"
 ADD_DEPENDENTS_SCRIPT="$SCRIPT_DIR/add-dependents.sh"
 [[ -x "$APPLY_SCRIPT" ]] || exit 0
 
@@ -92,7 +92,7 @@ unescape_yaml() {
   printf '%s' "$s"
 }
 
-# Walks routes.yaml with the same indentation-tracked stack apply_updates.sh
+# Walks routes.yaml with the same indentation-tracked stack apply-updates.sh
 # and add-dependents.sh already use for this exact layout (not
 # centralized into a shared helper — this codebase already duplicates
 # this snippet per-script rather than adding an extra process hop for

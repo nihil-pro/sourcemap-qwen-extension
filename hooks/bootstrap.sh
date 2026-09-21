@@ -12,11 +12,11 @@
 # happens after this hook has already exited.
 #
 # Never overwrites an existing routes.yaml — that's what sync.sh (Stop
-# hook) and refresh_dirty.sh (for individually edited files) are for.
+# hook) and refresh-dirty.sh (for individually edited files) are for.
 #
 # The background work is launched via `nohup ... & disown` — the exact
-# pattern hook_sync_on_stop.sh already uses successfully for
-# refresh_dirty.sh. `nohup` only protects a single external command from
+# pattern sync-stale.sh already uses successfully for
+# refresh-dirty.sh. `nohup` only protects a single external command from
 # SIGHUP, not an inline "(...)" subshell block; an earlier version that
 # backgrounded a subshell directly here was observed getting killed right
 # after this hook's own synchronous portion returned.
@@ -27,8 +27,8 @@ cat >/dev/null  # drain stdin; SessionStart's input isn't needed here
 
 ROOT_DIR="${QWEN_PROJECT_DIR:-$(pwd)}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LIB_SCRIPT="$SCRIPT_DIR/lib.sh"
-POPULATE_SCRIPT="$SCRIPT_DIR/populate.sh"
+LIB_SCRIPT="$SCRIPT_DIR/scripts/lib.sh"
+POPULATE_SCRIPT="$SCRIPT_DIR/scripts/populate.sh"
 
 [[ -f "$LIB_SCRIPT" ]] && source "$LIB_SCRIPT"
 

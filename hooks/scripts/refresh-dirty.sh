@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# refresh_dirty.sh — refreshes ::meta (context/depends) for files marked
-# dirty by mark_dirty.sh this session, then recomputes the "dependents"
+# refresh-dirty.sh — refreshes ::meta (context/depends) for files marked
+# dirty by mark-stale.sh this session, then recomputes the "dependents"
 # graph. Spawned in the BACKGROUND (detached, non-blocking) by
-# hook_sync_on_stop.sh once structural sync is done, so it never delays
+# sync-stale.sh once structural sync is done, so it never delays
 # the user's turn — see that script for the launch side.
 #
 # Runs with `qwen -e none` — NOT --safe-mode. Hooks apply to *any* qwen
@@ -20,7 +20,7 @@
 #
 # The model is asked for *content only*, via --json-schema
 # structured_output, and never touches routes.yaml directly — that's
-# applied mechanically by apply_updates.sh afterward. This is deliberate:
+# applied mechanically by apply-updates.sh afterward. This is deliberate:
 # a model can mis-format YAML in ways that are individually plausible but
 # break the file; asking it only for {path, context, depends} and
 # patching those exact fields ourselves means it structurally cannot
@@ -43,7 +43,7 @@
 # own test files happened not to contain one, which is why this passed
 # earlier testing despite the bug being present the whole time.
 #
-# Usage: ./refresh_dirty.sh <root_dir> <session_id>
+# Usage: ./refresh-dirty.sh <root_dir> <session_id>
 
 set -uo pipefail
 
@@ -61,7 +61,6 @@ DIRTY_FILE="$DIRTY_DIR/$SESSION_ID.json"
 [[ -f "$ROUTES_FILE" ]] || exit 0
 [[ -f "$DIRTY_FILE" ]] || exit 0
 
-MODEL="${SOURCEMAP_REFRESH_MODEL:-qwen/qwen3.8-27b}"
 MAX_TOOL_CALLS="${SOURCEMAP_REFRESH_MAX_TOOL_CALLS:-10}"
 
 LOCK_DIR="$(dirname "$ROUTES_FILE")/.refresh.lock"
@@ -83,8 +82,8 @@ rm -f "$DIRTY_FILE"
 # there (unlike the inline single-quoted string this replaced, which
 # needed the '"'"' trick to embed a literal apostrophe). Read verbatim;
 # if either is missing, there's nothing sane to send the model.
-SYSTEM_PROMPT_FILE="$SCRIPT_DIR/refresh-dirty.system.md"
-MESSAGE_TEMPLATE_FILE="$SCRIPT_DIR/refresh-dirty.message.md"
+SYSTEM_PROMPT_FILE="$SCRIPT_DIR/../prompts/refresh-dirty-system.md"
+MESSAGE_TEMPLATE_FILE="$SCRIPT_DIR/../prompts/refresh-dirty-message.md"
 [[ -f "$SYSTEM_PROMPT_FILE" && -f "$MESSAGE_TEMPLATE_FILE" ]] || exit 0
 
 # Build one combined message: the static template followed by the full
@@ -121,7 +120,7 @@ schema='{"type":"object","properties":{"files":{"type":"array","items":{"type":"
 # here (a dirty-file batch's transcript easily exceeds 64KB once file
 # content is embedded).
 raw_output_file="$(mktemp "${TMPDIR:-/tmp}/sourcemap_refresh_raw.XXXXXX.json")"
-(cd "$ROOT_DIR" && qwen -e none -m "$MODEL" \
+(cd "$ROOT_DIR" && qwen -e none \
     --system-prompt "$system_prompt" \
     --output-format json \
     --max-tool-calls "$MAX_TOOL_CALLS" \
@@ -142,7 +141,7 @@ rm -f "$raw_output_file"
 updates_tmp="$(mktemp "${TMPDIR:-/tmp}/sourcemap_updates.XXXXXX.json")"
 jq -n --argjson files "$files_json" '{files: $files}' > "$updates_tmp"
 
-APPLY_SCRIPT="$SCRIPT_DIR/apply_updates.sh"
+APPLY_SCRIPT="$SCRIPT_DIR/apply-updates.sh"
 if [[ -x "$APPLY_SCRIPT" ]]; then
   "$APPLY_SCRIPT" "$ROOT_DIR" "$updates_tmp" >/dev/null 2>&1 || true
 fi

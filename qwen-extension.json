@@ -1,5 +1,5 @@
 {
   "name": "sourcemap",
   "version": "1.0.0",
-  "description": "Maintains a routes.yaml map of the project's files/directories (with LLM-fillable context/depends notes), keeps it in sync with the filesystem, and helps the agent scope which files are relevant to a task via a lightweight subagent."
+  "description": "Maintains a bidirectional-graph of the project's files relationships with LLM-fillable context notes. Keeps it in sync with the filesystem, and helps the agent scope which files are relevant to a task via a lightweight subagent."
 }

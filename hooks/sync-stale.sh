@@ -3,14 +3,14 @@
 # Keeps routes.yaml's structure in sync with the filesystem after each turn, by delegating to sync.sh
 
 # In a git repo, only runs when `git status --porcelain` shows a change to a path sync.sh would actually notice;
-# i.e. a path not pruned by lib.sh's own ignore rules, OR this session has files mark_dirty.sh recorded as edited.
+# i.e. a path not pruned by lib.sh's own ignore rules, OR this session has files mark-stale.sh recorded as edited.
 
 # Without git (or outside a repo), always runs; sync.sh's own diff is what tells you whether anything structurally changed.
 
 # Only surfaces a systemMessage to the user when something structural actually changed; a no-op sync stays silent.
 
 # After structural sync, also checks that same dirty list, and if non-empty,
-# spawns refresh_dirty.sh in the BACKGROUND to regenerate exactly those files' ::meta context/depends.
+# spawns refresh-dirty.sh in the BACKGROUND to regenerate exactly those files' ::meta context/depends.
 
 # Backgrounded, so a content refresh never delays this turn
 
@@ -26,9 +26,9 @@ cd "$ROOT_DIR" || exit 0
 # this file's own location, not $ROOT_DIR, so a future move of the whole
 # sourcemap/ folder doesn't break this path again.
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SYNC_SCRIPT="$HOOK_DIR/sync.sh"
-LIB_SCRIPT="$HOOK_DIR/lib.sh"
-REFRESH_SCRIPT="$HOOK_DIR/refresh_dirty.sh"
+SYNC_SCRIPT="$HOOK_DIR/scripts/sync.sh"
+LIB_SCRIPT="$HOOK_DIR/scripts/lib.sh"
+REFRESH_SCRIPT="$HOOK_DIR/scripts/refresh-dirty.sh"
 
 [[ -x "$SYNC_SCRIPT" ]] || exit 0
 [[ -f "$LIB_SCRIPT" ]] || exit 0

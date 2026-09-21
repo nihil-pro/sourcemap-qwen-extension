@@ -23,7 +23,7 @@ SESSION_ID="$(jq -r '.session_id // empty' <<<"$INPUT")"
 
 ROOT_DIR="${QWEN_PROJECT_DIR:-$(pwd)}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LIB_SCRIPT="$SCRIPT_DIR/lib.sh"
+LIB_SCRIPT="$SCRIPT_DIR/scripts/lib.sh"
 [[ -f "$LIB_SCRIPT" ]] && source "$LIB_SCRIPT"
 ROUTES_FILE="$ROOT_DIR/${DEFAULT_OUTPUT_FILE:-.qwen/sourcemap/routes.yaml}"
 
@@ -52,10 +52,10 @@ if [[ -n "$SESSION_ID" ]]; then
   rmdir "$LOCK_DIR" 2>/dev/null || true
 fi
 
-# The injected hint text lives in scout-hint.md, a sibling of this
-# script — plain prompt content, no shell-escaping needed there. Read
-# verbatim; if it's missing, there's nothing to inject.
-CONTEXT_FILE="$SCRIPT_DIR/scout-hint.md"
+# The injected hint text lives in prompts/scout-hint.md — plain prompt
+# content, no shell-escaping needed there. Read verbatim; if it's
+# missing, there's nothing to inject.
+CONTEXT_FILE="$SCRIPT_DIR/prompts/scout-hint.md"
 [[ -f "$CONTEXT_FILE" ]] || exit 0
 context="$(cat "$CONTEXT_FILE")"
 

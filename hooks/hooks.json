@@ -5,9 +5,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/bootstrap.sh",
-            "name": "routes-bootstrap-on-start",
-            "timeout": 60
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bootstrap.sh",
+            "name": "sourcemap-start",
+            "timeout": 2000
           }
         ]
       }
@@ -18,9 +18,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/mark_dirty.sh",
-            "name": "routes-mark-dirty",
-            "timeout": 10
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/mark-stale.sh",
+            "name": "sourcemap-dirty",
+            "timeout": 2000
           }
         ]
       }
@@ -30,9 +30,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/scout-hint.sh",
-            "name": "routes-scout-hint",
-            "timeout": 10
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scout-hint.sh",
+            "name": "sourcemap-hint",
+            "timeout": 2000
           }
         ]
       }
@@ -42,9 +42,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/hook_sync_on_stop.sh",
-            "name": "routes-sync-on-stop",
-            "timeout": 30
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/sync-stale.sh",
+            "name": "sourcemap-stop",
+            "timeout": 2000
           }
         ]
       }

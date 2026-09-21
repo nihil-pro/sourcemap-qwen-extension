@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# apply_updates.sh — mechanically rewrites specific nodes' "context" and
+# apply-updates.sh — mechanically rewrites specific nodes' "context" and
 # "depends" in routes.yaml from a JSON updates file, leaving every other
 # line — including any "dependents" block add-dependents.sh already
-# wrote — untouched. The model that produces the updates (refresh_dirty.sh)
+# wrote — untouched. The model that produces the updates (refresh-dirty.sh)
 # never touches the YAML directly: it only returns content via
 # --json-schema structured_output, and this script applies it using the
 # same indentation-bounded parsing sync.sh already uses, so a model can't
@@ -26,7 +26,7 @@
 # just resolving it here, the same reasoning as trusting the model for
 # content only and never for YAML structure.
 #
-# Usage: ./apply_updates.sh <root_dir> <updates_json_file> [output_file]
+# Usage: ./apply-updates.sh <root_dir> <updates_json_file> [output_file]
 #   updates_json_file: {"files":[{"path":"a/b.ts","context":"...","depends":["c/d.ts"]}]}
 #   output_file: relative to root_dir (default: lib.sh's DEFAULT_OUTPUT_FILE)
 

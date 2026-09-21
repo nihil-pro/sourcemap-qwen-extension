@@ -2,7 +2,7 @@
 # PostToolUse hook (matcher: "^(edit|replace|write_file)$").
 
 # Records the edited/written file's path into this session's "dirty" list,
-# so hook_sync_on_stop.sh can trigger a scoped ::meta refresh for exactly the files that actually changed this session.
+# so sync-stale.sh can trigger a scoped ::meta refresh for exactly the files that actually changed this session.
 
 # Fast and synchronous: no LLM call here, just a state-file append
 
@@ -19,7 +19,7 @@ FILE_PATH="$(jq -r '.tool_input.file_path // empty' <<<"$INPUT")"
 
 ROOT_DIR="${QWEN_PROJECT_DIR:-$(pwd)}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LIB_SCRIPT="$SCRIPT_DIR/lib.sh"
+LIB_SCRIPT="$SCRIPT_DIR/scripts/lib.sh"
 [[ -f "$LIB_SCRIPT" ]] && source "$LIB_SCRIPT"
 
 # Only track paths inside the project root.
