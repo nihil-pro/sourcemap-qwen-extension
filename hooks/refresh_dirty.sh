@@ -119,7 +119,13 @@ raw_output="$(
 )"
 [[ $? -eq 0 ]] || exit 0
 
-files_json="$(printf '%s' "$raw_output" | jq -c '.[-1].structured_result.files // empty' 2>/dev/null)"
+# --output-format json emits one JSON object per event in an array; the
+# final "result"-type event's own "result" field is the structured_output
+# answer, but re-encoded as a JSON STRING (not a nested object) — hence
+# the "fromjson". Confirmed directly against real output; there is no
+# "structured_result" key anywhere in the stream despite the name being
+# a plausible guess.
+files_json="$(printf '%s' "$raw_output" | jq -c '[.[] | select(.type=="result")] | last | .result | fromjson | .files // empty' 2>/dev/null)"
 [[ -n "$files_json" && "$files_json" != "null" ]] || exit 0
 
 updates_tmp="$(mktemp "${TMPDIR:-/tmp}/sourcemap_updates.XXXXXX.json")"
