@@ -1,0 +1,39 @@
+[package]
+name = "deepgraph"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "deepgraph"
+path = "src/main.rs"
+
+[dependencies]
+tree-sitter = "0.22"
+tree-sitter-java = "0.21"
+tree-sitter-python = "0.21"
+tree-sitter-javascript = "0.21"
+tree-sitter-typescript = "0.21"
+tree-sitter-md = "0.3"
+ignore = "0.4"
+globset = "0.4"
+strsim = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+fastembed = { version = "4", optional = true, default-features = false, features = ["hf-hub-native-tls"] }
+ort = { version = "=2.0.0-rc.9", optional = true, default-features = false }
+
+[features]
+# Shared bits: the `search --semantic`/`--model-dir` machinery, regardless
+# of how the ONNX Runtime engine itself gets acquired.
+embeddings-core = ["dep:fastembed", "dep:ort"]
+# Default: `ort` downloads a prebuilt ONNX Runtime at build time. Needs
+# network access to GitHub at build time.
+embeddings = ["embeddings-core", "fastembed/ort-download-binaries"]
+# For private/offline networks: `ort` loads ONNX Runtime dynamically at
+# *runtime* from a path you provide (`--onnx-runtime <path>` or the
+# `ORT_DYLIB_PATH` env var), so no runtime binary is downloaded at all,
+# at build time or run time. Combine with `search --model-dir` to make
+# the whole `search --semantic` path fully offline.
+embeddings-local-runtime = ["embeddings-core", "fastembed/ort-load-dynamic"]

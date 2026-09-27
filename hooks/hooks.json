@@ -12,19 +12,6 @@
         ]
       }
     ],
-    "PostToolUse": [
-      {
-        "matcher": "^(edit|replace|write_file)$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/mark-stale.sh",
-            "name": "sourcemap-dirty",
-            "timeout": 2000
-          }
-        ]
-      }
-    ],
     "UserPromptSubmit": [
       {
         "hooks": [
@@ -33,6 +20,19 @@
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scout-hint.sh",
             "name": "sourcemap-hint",
             "timeout": 2000
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^agent$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scout-result.sh",
+            "name": "sourcemap-scout-result",
+            "timeout": 5000
           }
         ]
       }

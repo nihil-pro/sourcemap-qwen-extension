@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # UserPromptSubmit hook.
-# Injects a short, static reminder that a "sourcemap-scout" subagent exists and can scope relevant files via routes.yaml,
+# Injects a short, static reminder that a "sourcemap-scout" subagent exists and can scope relevant files via the sourcemap's ctx.json,
 # leaving the decision of *whether* to spawn it — and the actual file-relevance reasoning — to the orchestrating model itself.
 
 # This deliberately does NO LLM call and NO classification of its own.
@@ -19,18 +19,23 @@
 set -uo pipefail
 
 INPUT="$(cat)"
-SESSION_ID="$(jq -r '.session_id // empty' <<<"$INPUT")"
 
 ROOT_DIR="${QWEN_PROJECT_DIR:-$(pwd)}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_SCRIPT="$SCRIPT_DIR/scripts/lib.sh"
-[[ -f "$LIB_SCRIPT" ]] && source "$LIB_SCRIPT"
-ROUTES_FILE="$ROOT_DIR/${DEFAULT_OUTPUT_FILE:-.qwen/sourcemap/routes.yaml}"
+[[ -f "$LIB_SCRIPT" ]] || exit 0
+# shellcheck source=scripts/lib.sh
+source "$LIB_SCRIPT"
+OUT_DIR="$ROOT_DIR/$SOURCEMAP_REL_DIR"
 
-[[ -f "$ROUTES_FILE" ]] || exit 0
+# Nothing for the scout to read until the first background annotate.sh run has produced it
+[[ -f "$OUT_DIR/ctx.json" ]] || exit 0
+init_error_log "$ROOT_DIR" || exit 0
 
-# Session-scoped state lives under the project's sourcemap data dir; so it's automatically excluded from routes.yaml
-STATE_DIR="$ROOT_DIR/.qwen/sourcemap/.hint-sessions"
+SESSION_ID="$(jq -r '.session_id // empty' <<<"$INPUT")"
+
+# Session-scoped state lives under the project's sourcemap data dir (hidden, so deepgraph never scans it)
+STATE_DIR="$OUT_DIR/.hint-sessions"
 mkdir -p "$STATE_DIR"
 find "$STATE_DIR" -maxdepth 1 -name '*.done' -mtime +7 -delete 2>/dev/null || true
 

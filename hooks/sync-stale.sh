@@ -1,84 +1,68 @@
 #!/usr/bin/env bash
 # Stop hook.
-# Keeps routes.yaml's structure in sync with the filesystem after each turn, by delegating to sync.sh
+# Keeps graph.json/ctx.json in sync with the filesystem after each turn by re-running `deepgraph build`,
+# which is fast enough to do synchronously (static analysis only, no LLM).
 
-# In a git repo, only runs when `git status --porcelain` shows a change to a path sync.sh would actually notice;
-# i.e. a path not pruned by lib.sh's own ignore rules, OR this session has files mark-stale.sh recorded as edited.
+# In a git repo, only runs when `git status --porcelain` shows any change;
+# without git (or outside a repo), always runs.
 
-# Without git (or outside a repo), always runs; sync.sh's own diff is what tells you whether anything structurally changed.
+# Only surfaces a systemMessage to the user when files were added or removed; a no-op sync stays silent.
 
-# Only surfaces a systemMessage to the user when something structural actually changed; a no-op sync stays silent.
+# Then, if any file's note is missing or stale (its content hash moved since the note was written),
+# spawns annotate.sh in the BACKGROUND to (re)write exactly those notes, so a content refresh never delays this turn.
+# Staleness comes from deepgraph's content hashes, so it covers every change, not just the ones made through the agent's own edit tools.
 
-# After structural sync, also checks that same dirty list, and if non-empty,
-# spawns refresh-dirty.sh in the BACKGROUND to regenerate exactly those files' ::meta context/depends.
+# Does nothing until bootstrap.sh's background run has built deepgraph and the first graph.
 
-# Backgrounded, so a content refresh never delays this turn
+set -uo pipefail
 
-set -euo pipefail
-
-INPUT="$(cat)"
-SESSION_ID="$(jq -r '.session_id // empty' <<<"$INPUT" 2>/dev/null || true)"
+cat >/dev/null  # drain stdin; Stop's input isn't needed here
 
 ROOT_DIR="${QWEN_PROJECT_DIR:-$(pwd)}"
-cd "$ROOT_DIR" || exit 0
-
-# sync.sh and lib.sh are siblings of this script — resolve relative to
-# this file's own location, not $ROOT_DIR, so a future move of the whole
-# sourcemap/ folder doesn't break this path again.
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SYNC_SCRIPT="$HOOK_DIR/scripts/sync.sh"
 LIB_SCRIPT="$HOOK_DIR/scripts/lib.sh"
-REFRESH_SCRIPT="$HOOK_DIR/scripts/refresh-dirty.sh"
+ANNOTATE_SCRIPT="$HOOK_DIR/scripts/annotate.sh"
 
-[[ -x "$SYNC_SCRIPT" ]] || exit 0
 [[ -f "$LIB_SCRIPT" ]] || exit 0
-OUTPUT_FILE="routes.yaml"
-# shellcheck source=lib.sh
+# shellcheck source=scripts/lib.sh
 source "$LIB_SCRIPT"
 
-DIRTY_FILE="$ROOT_DIR/$(dirname "$DEFAULT_OUTPUT_FILE")/.dirty-sessions/$SESSION_ID.json"
-has_dirty=false
-if [[ -n "$SESSION_ID" && -s "$DIRTY_FILE" ]]; then
-  [[ "$(jq '(.files // []) | length' "$DIRTY_FILE" 2>/dev/null || echo 0)" -gt 0 ]] && has_dirty=true
-fi
+OUT_DIR="$ROOT_DIR/$SOURCEMAP_REL_DIR"
+[[ -x "$DEEPGRAPH_BIN" && -f "$OUT_DIR/graph.json" && -f "$OUT_DIR/ctx.json" ]] || exit 0
+init_error_log "$ROOT_DIR" || exit 0
 
 if [[ -d "$ROOT_DIR/.git" ]] && command -v git >/dev/null 2>&1; then
-  # True if every path segment is checked against lib.sh's ignore rules
-  path_is_ignored() {
-    local path="$1"
-    local seg
-    local IFS='/'
-    for seg in $path; do
-      is_ignored "$seg" && return 0
-    done
-    return 1
-  }
-
-  relevant=false
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    # porcelain format: "XY path" ("XY old -> new" for a rename/copy)
-    path="${line:3}"
-    path="${path#*-> }"
-    path="${path%\"}"
-    path="${path#\"}"
-    if ! path_is_ignored "$path"; then
-      relevant=true
-      break
-    fi
-  done < <(git -C "$ROOT_DIR" status --porcelain 2>/dev/null)
-
-  [[ "$relevant" == true || "$has_dirty" == true ]] || exit 0
+  [[ -n "$(git -C "$ROOT_DIR" status --porcelain 2>/dev/null)" ]] || exit 0
 fi
 
-# No output_file arg — let sync.sh apply its own default (lib.sh's DEFAULT_OUTPUT_FILE), so this hook never has to duplicate that path
-output="$("$SYNC_SCRIPT" "$ROOT_DIR" 2>&1)" || exit 0
+load_settings "$ROOT_DIR"
 
-if printf '%s' "$output" | grep -qE '^(Added|Removed)'; then
-  jq -n --arg msg "$output" '{systemMessage: $msg}'
-fi
+# annotate.sh only holds this lock for a single ctx.json write; if it can't be had within ~1s, skip this turn's sync
+# rather than risk the hook timeout; the next Stop (or session start) catches up.
+WRITE_LOCK="$OUT_DIR/.write.lock"
+wait_lock "$WRITE_LOCK" 20 || exit 0
+trap 'release_lock "$WRITE_LOCK"' EXIT
 
-if [[ "$has_dirty" == true && -x "$REFRESH_SCRIPT" ]]; then
-  nohup "$REFRESH_SCRIPT" "$ROOT_DIR" "$SESSION_ID" >/dev/null 2>&1 &
+before="$(jq -r 'keys[]' "$OUT_DIR/ctx.json")"
+# deepgraph_build logs its own failures
+deepgraph_build "$ROOT_DIR" || exit 0
+after="$(jq -r 'keys[]' "$OUT_DIR/ctx.json")"
+pending="$(enumerate_pending "$OUT_DIR")"
+
+release_lock "$WRITE_LOCK"
+trap - EXIT
+
+added="$(comm -13 <(printf '%s\n' "$before" | sort) <(printf '%s\n' "$after" | sort) | sed '/^$/d')"
+removed="$(comm -23 <(printf '%s\n' "$before" | sort) <(printf '%s\n' "$after" | sort) | sed '/^$/d')"
+
+output=""
+[[ -n "$added" ]] && output="Added to sourcemap:"$'\n'"$(sed 's/^/  + /' <<<"$added")"
+[[ -n "$removed" ]] && output="${output:+$output$'\n'}Removed from sourcemap:"$'\n'"$(sed 's/^/  - /' <<<"$removed")"
+[[ -n "$output" ]] && jq -n --arg msg "$output" '{systemMessage: $msg}'
+
+if [[ -n "$pending" && -x "$ANNOTATE_SCRIPT" ]] && annotation_enabled; then
+  nohup "$ANNOTATE_SCRIPT" "$ROOT_DIR" >/dev/null &
   disown 2>/dev/null || true
 fi
+
+exit 0

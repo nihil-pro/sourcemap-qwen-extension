@@ -1,0 +1,40 @@
+{
+  "root": "/Users/roman/Documents/development/extensions/sourcemap",
+  "generated_at": "2026-09-27T08:34:50Z",
+  "nodes": {
+    "README.md": {
+      "hash": "aca26a271df91b87",
+      "exports": [],
+      "dependencies": [
+        "deepgraph/README.md"
+      ],
+      "dependents": []
+    },
+    "agents/sourcemap-scout.md": {
+      "hash": "f7f9d3a109f86c94",
+      "exports": [],
+      "dependencies": [],
+      "dependents": []
+    },
+    "deepgraph/README.md": {
+      "hash": "cb2f495417a4260e",
+      "exports": [],
+      "dependencies": [],
+      "dependents": [
+        "README.md"
+      ]
+    },
+    "hooks/prompts/annotate.md": {
+      "hash": "dd6661fb5bac4e13",
+      "exports": [],
+      "dependencies": [],
+      "dependents": []
+    },
+    "hooks/prompts/scout-hint.md": {
+      "hash": "0552c2b8c934a654",
+      "exports": [],
+      "dependencies": [],
+      "dependents": []
+    }
+  }
+}
