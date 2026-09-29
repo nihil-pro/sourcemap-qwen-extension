@@ -83,8 +83,10 @@ impl Style {
 
 /// What a block says about one file.
 pub struct HeaderInfo<'a> {
-    /// The note, and whether it was written for an older version of the file.
-    pub ctx: Option<(&'a str, bool)>,
+    /// The note. Shown even when written for an older version of the
+    /// file: an edit rarely changes *what* a file does, and a stale note
+    /// is re-annotated soon anyway.
+    pub ctx: Option<&'a str>,
     pub dependents: &'a [String],
 }
 
@@ -98,11 +100,9 @@ pub fn render(lang: Lang, info: &HeaderInfo) -> Option<Vec<String>> {
     let mut lines = vec![format!("{} (generated; do not edit)", st.start)];
     // `@ctx:` and `@dependents:` are unique enough to grep for (a bare
     // `ctx:` is a common identifier, e.g. a canvas context), so
-    // `@ctx:.*word` lists one description line per file. "(outdated)"
-    // goes after the colon to keep that pattern matching.
-    if let Some((ctx, stale)) = info.ctx {
-        let outdated = if stale { "(outdated) " } else { "" };
-        lines.push(format!("{}@ctx: {outdated}{}", st.mid, st.sanitize(ctx)));
+    // `@ctx:.*word` lists one description line per file.
+    if let Some(ctx) = info.ctx {
+        lines.push(format!("{}@ctx: {}", st.mid, st.sanitize(ctx)));
     }
     let deps = if info.dependents.is_empty() {
         "none".to_string()
@@ -269,8 +269,8 @@ mod tests {
 
     fn infos<'a>(d: &'a [String]) -> Vec<HeaderInfo<'a>> {
         vec![
-            HeaderInfo { ctx: Some(("Does a thing.", false)), dependents: &[] },
-            HeaderInfo { ctx: Some(("Does */ --> a\nthing.", true)), dependents: d },
+            HeaderInfo { ctx: Some("Does a thing."), dependents: &[] },
+            HeaderInfo { ctx: Some("Does */ --> a\nthing."), dependents: d },
             HeaderInfo { ctx: None, dependents: d },
         ]
     }
@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn block_is_at_the_end_with_file_eol() {
         let d = deps(1);
-        let block = render(Lang::TypeScript, &HeaderInfo { ctx: Some(("X.", false)), dependents: &d }).unwrap();
+        let block = render(Lang::TypeScript, &HeaderInfo { ctx: Some("X."), dependents: &d }).unwrap();
         assert_eq!(
             apply("a\r\n", Lang::TypeScript, Some(&block)),
             "a\r\n\r\n/* @sourcemap (generated; do not edit)\r\n * @ctx: X.\r\n * @dependents: src/dep0.ts\r\n * @end-sourcemap */\r\n"
@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn strips_block_with_code_appended_after_it() {
-        let block = render(Lang::JavaScript, &HeaderInfo { ctx: Some(("X.", false)), dependents: &[] }).unwrap();
+        let block = render(Lang::JavaScript, &HeaderInfo { ctx: Some("X."), dependents: &[] }).unwrap();
         let applied = apply("a();\n", Lang::JavaScript, Some(&block));
         let edited = format!("{applied}b();\n");
         assert_eq!(strip(&edited, Lang::JavaScript), "a();\nb();\n");

@@ -174,8 +174,9 @@ its note and its dependents (at most 10 listed):
 ```
 
 Python uses `#` lines and Markdown an HTML comment. A file with neither
-a note nor dependents gets no block; a note written for other content
-is shown as `@ctx: (outdated) …`. The labels are `@`-prefixed so they
+a note nor dependents gets no block. A note written for other content
+is still shown as is (an edit rarely changes what a file does) until
+it's re-annotated. The labels are `@`-prefixed so they
 can be grepped for without matching code: `@ctx:.*token` lists one
 description line per file. Only files whose block changes are
 rewritten, a file edited since the last `build` is skipped, and a file

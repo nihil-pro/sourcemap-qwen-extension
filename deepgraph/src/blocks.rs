@@ -68,7 +68,7 @@ pub fn write_headers(root: &Path, graph: &Graph, notes: &Notes, only: Option<&[S
         }
         let note = notes.get(path);
         let info = HeaderInfo {
-            ctx: note.map(|n| (n.ctx.as_str(), n.hash != node.hash)),
+            ctx: note.map(|n| n.ctx.as_str()),
             dependents: &node.dependents,
         };
         let block = header::render(lang, &info);
