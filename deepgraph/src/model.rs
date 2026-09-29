@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 /// since it's already implied by the path's extension.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Node {
-    /// Content hash (non-cryptographic). Used by `show` to tell whether
-    /// a note in the `ctx.json` sidecar is still fresh.
+    /// Content hash of the file without its `@sourcemap` block (see
+    /// `header::content_hash`). A note is current while its `hash` matches.
     pub hash: String,
 
     /// True if this file exists only to re-export symbols from other
@@ -60,19 +60,15 @@ pub struct Graph {
     pub nodes: BTreeMap<String, Node>,
 }
 
-/// One entry in the `ctx.json` sidecar. `deepgraph build` keeps this
-/// file's *keys* in sync with `graph.json` (adding an empty stub per
-/// new file, dropping entries for files that are gone) but never
-/// writes `ctx`/`ctx_hash` themselves -- that's up to a human or an
-/// LLM (see `deepgraph show`).
+/// A file's note as `show`/`search` use it (read from the notes file,
+/// see `notes`); also the entry format of the old `ctx.json` sidecar that
+/// `import-ctx` reads.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CtxEntry {
     /// What the file does, not how. Free text.
     pub ctx: String,
     /// The file's `hash` (from `graph.json`) at the time `ctx` was
-    /// written. `deepgraph show` compares this against the current hash
-    /// to report whether the note might be stale; update this field (or
-    /// re-run whatever wrote `ctx`) to clear that.
+    /// written; the note is stale once that no longer matches.
     pub ctx_hash: String,
 }
 

@@ -2,3 +2,4 @@
 .env
 bin/
 deepgraph/target/
+.DS_Store

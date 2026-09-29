@@ -1,1 +1,0 @@
-To save token budget, once you understand your task, ask the "sourcemap-scout" subagent (in the foreground) which files are relevant to it; it is more efficient than grep_search in large codebases. Set its prompt to the user's request copied verbatim and nothing else. Guesses about file names, symbols, or search strategy can't help it and only mislead it.

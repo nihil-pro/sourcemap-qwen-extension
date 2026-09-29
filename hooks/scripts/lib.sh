@@ -3,32 +3,49 @@
 # Must stay bash-3.2-compatible (macOS's default bash): no associative arrays, no mapfile,
 # and every possibly-empty array expanded as ${arr[@]+"${arr[@]}"} under `set -u`.
 
-# Per-project generated data, relative to the project root (not this extension's install location).
-# deepgraph writes graph.json (structure, fully regenerated each build) and ctx.json (LLM notes, preserved across builds) here.
-# This is the single source of truth for that path.
-SOURCEMAP_REL_DIR=".qwen/sourcemap"
+# Everything the extension generates lives outside the project and outside the extension's install dir (which qwen
+# replaces on every extension update), except the notes file, which is committed so notes are paid for only once per team.
+# SOURCEMAP_HOME can be overridden (tests do).
+SOURCEMAP_HOME="${SOURCEMAP_HOME:-$HOME/.qwen/sourcemap}"
+
+# Notes (one LLM-written sentence per file) are shared through git: this file is meant to be committed.
+NOTES_REL=".qwen/sourcemap/notes.jsonl"
 
 _LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXT_DIR="$(cd "$_LIB_DIR/../.." && pwd)"
 
 # deepgraph's source is vendored into the extension and built on first use (qwen-code has no postinstall hook).
-# bin/ is recreated from scratch whenever qwen reinstalls/updates the extension, which is what triggers a rebuild of a new version.
+# The binary is installed at a stable path, not inside the extension, because the git clean filter configured in each project
+# (see setup_git_filter) runs it on every `git add`/`git status`: a path that disappears on an extension update would break git.
 DEEPGRAPH_SRC="$EXT_DIR/deepgraph"
-EXT_BIN_DIR="$EXT_DIR/bin"
-DEEPGRAPH_BIN="$EXT_BIN_DIR/deepgraph"
-# Holds the cargo feature set the binary was built with, so changing the ONNX Runtime setting triggers a rebuild
-DEEPGRAPH_STAMP="$EXT_BIN_DIR/.build-stamp"
-DEEPGRAPH_BUILD_LOG="$EXT_BIN_DIR/build.log"
-DEEPGRAPH_BUILD_FAILED="$EXT_BIN_DIR/.build-failed"
+DEEPGRAPH_BIN_DIR="$SOURCEMAP_HOME/bin"
+DEEPGRAPH_BIN="$DEEPGRAPH_BIN_DIR/deepgraph"
+# Checksum of the sources the binary was built from, so an extension update (or a local edit) triggers a rebuild
+DEEPGRAPH_STAMP="$DEEPGRAPH_BIN_DIR/.build-stamp"
+DEEPGRAPH_BUILD_LOG="$SOURCEMAP_HOME/build.log"
+DEEPGRAPH_BUILD_FAILED="$SOURCEMAP_HOME/.build-failed"
+
+# The file types deepgraph writes @sourcemap blocks into (walk.rs's detect_lang), for the git attributes
+SOURCEMAP_EXTS="java py pyi js jsx mjs cjs ts mts cts tsx md markdown"
+
+# Sets STATE_DIR (this project's local, disposable data: graph.json, error.log, locks) and NOTES_FILE.
+# The state dir is named after the project's directory plus a checksum of its full path, so two projects never share one.
+# Usage: project_paths <root_dir>
+project_paths() {
+  local root="$1"
+  STATE_DIR="$SOURCEMAP_HOME/projects/$(basename "$root")-$(printf '%s' "$root" | cksum | cut -d' ' -f1)"
+  NOTES_FILE="$root/$NOTES_REL"
+}
 
 # Sends the calling script's stderr to the project's error.log, so every failure — explicit log_error calls and whatever a
 # command prints to stderr — ends up in one place instead of /dev/null (hooks' and background runs' output is never seen).
 # Call right after sourcing this file; child scripts inherit the redirect. Trims the log to its last 1000 lines past ~1MB.
+# Also sets the project_paths variables.
 # Usage: init_error_log <root_dir>
 init_error_log() {
-  local dir="$1/$SOURCEMAP_REL_DIR"
-  SOURCEMAP_ERROR_LOG="$dir/error.log"
-  mkdir -p "$dir" || return 1
+  project_paths "$1"
+  SOURCEMAP_ERROR_LOG="$STATE_DIR/error.log"
+  mkdir -p "$STATE_DIR" || return 1
   if [[ -f "$SOURCEMAP_ERROR_LOG" && $(wc -c < "$SOURCEMAP_ERROR_LOG") -gt 1048576 ]]; then
     tail -n 1000 "$SOURCEMAP_ERROR_LOG" > "$SOURCEMAP_ERROR_LOG.tmp" && mv "$SOURCEMAP_ERROR_LOG.tmp" "$SOURCEMAP_ERROR_LOG"
   fi
@@ -60,11 +77,9 @@ _read_env_key() {
 # Usage: load_settings <root_dir>
 load_settings() {
   local root="$1" key val
-  for key in SOURCEMAP_ONNX_RUNTIME SOURCEMAP_MODEL_DIR SOURCEMAP_EXCLUDE SOURCEMAP_OPENAI_LOGGING SOURCEMAP_ANNOTATE; do
+  for key in SOURCEMAP_EXCLUDE SOURCEMAP_OPENAI_LOGGING SOURCEMAP_ANNOTATE; do
     [[ -n "${!key:-}" ]] && continue
     val="$(_read_env_key "$root/.env" "$key")" || val="$(_read_env_key "$EXT_DIR/.env" "$key")" || val=""
-    # prompts store whatever was typed, so expand a leading "~" for the two path settings
-    [[ ( "$key" == SOURCEMAP_ONNX_RUNTIME || "$key" == SOURCEMAP_MODEL_DIR ) && "$val" == "~"* ]] && val="$HOME${val:1}"
     printf -v "$key" '%s' "$val"
     export "${key?}"
   done
@@ -79,7 +94,7 @@ is_true() {
 }
 
 # LLM notes are on unless SOURCEMAP_ANNOTATE is set to something other than true/yes/1/on.
-# Off means no qwen calls at all: search then matches file paths and exported names only.
+# Off means no qwen calls at all: blocks then carry dependents only.
 annotation_enabled() {
   [[ -z "${SOURCEMAP_ANNOTATE:-}" ]] || is_true "$SOURCEMAP_ANNOTATE"
 }
@@ -95,24 +110,24 @@ run_qwen() {
   qwen ${extra[@]+"${extra[@]}"} "$@" </dev/null
 }
 
-# Semantic search needs a local ONNX Runtime; without one, deepgraph is built with its default features (fuzzy search only)
-deepgraph_features() {
-  if [[ -n "${SOURCEMAP_ONNX_RUNTIME:-}" ]]; then
-    printf 'embeddings-local-runtime'
-  fi
+# Checksum of everything the binary is built from
+deepgraph_source_stamp() {
+  (cd "$DEEPGRAPH_SRC" && LC_ALL=C find Cargo.toml Cargo.lock src -type f | LC_ALL=C sort | xargs cat) | cksum | cut -d' ' -f1
 }
 
 deepgraph_is_built() {
   [[ -x "$DEEPGRAPH_BIN" && -f "$DEEPGRAPH_STAMP" ]] || return 1
-  [[ "$(cat "$DEEPGRAPH_STAMP")" == "$(deepgraph_features)" ]]
+  [[ "$(cat "$DEEPGRAPH_STAMP")" == "$(deepgraph_source_stamp)" ]]
 }
 
-# Regenerates graph.json and syncs ctx.json's file list (never touching existing notes).
-# Callers must hold the write lock: ctx.json is also rewritten by annotate.sh, and deepgraph doesn't write it atomically.
-# Usage: deepgraph_build <root_dir>
+# Regenerates graph.json, tidies the notes file (drops notes of deleted files, resolves duplicates a union merge left), and
+# with --headers brings every file's @sourcemap block up to date.
+# Callers must hold the write lock: the notes file is also rewritten by annotate.sh.
+# Usage: deepgraph_build <root_dir> [--headers]
 deepgraph_build() {
   local root="$1" pat
-  local -a args=(build "$root" "$root/$SOURCEMAP_REL_DIR")
+  shift
+  local -a args=(build "$root" "$STATE_DIR" --notes "$NOTES_FILE" "$@")
   local -a patterns=()
   IFS=',' read -ra patterns <<<"${SOURCEMAP_EXCLUDE:-}"
   for pat in ${patterns[@]+"${patterns[@]}"}; do
@@ -121,25 +136,126 @@ deepgraph_build() {
     pat="${pat%"${pat##*[![:space:]]}"}"
     [[ -n "$pat" ]] && args+=(--exclude "$pat")
   done
-  # deepgraph reports progress on stderr too, so its output is only logged when the build actually fails
-  local out
-  if ! out="$("$DEEPGRAPH_BIN" "${args[@]}" 2>&1 >/dev/null)"; then
-    log_error "deepgraph build failed: $out"
+  # deepgraph reports progress on stderr too, so its stderr is only logged when the build actually fails.
+  # stdout lists the files whose block was rewritten.
+  local err_file written
+  err_file="$(mktemp "${TMPDIR:-/tmp}/sourcemap_build_err.XXXXXX")"
+  if ! written="$("$DEEPGRAPH_BIN" "${args[@]}" 2>"$err_file")"; then
+    log_error "deepgraph build failed: $(cat "$err_file")"
+    rm -f "$err_file"
+    return 1
+  fi
+  rm -f "$err_file"
+  [[ -z "$written" ]] || refresh_git_index "$root" "$written"
+}
+
+# After blocks were rewritten: a file whose size changed is reported as modified by `git status` without git even running the
+# clean filter (it trusts the size recorded in the index), so every block write would show up as a change. `git add` of a file
+# whose filtered content equals the index re-records its size without changing what's staged; only such files get it, never a
+# file with real unstaged changes, and never an untracked one.
+# Usage: refresh_git_index <root_dir> <newline-separated paths relative to root>
+refresh_git_index() {
+  local root="$1" written="$2" tracked changed unchanged
+  git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+  local -a git=(git --literal-pathspecs -c core.quotePath=false -C "$root")
+  tracked="$(printf '%s\n' "$written" | tr '\n' '\0' | xargs -0 "${git[@]}" ls-files -- | sort)"
+  [[ -n "$tracked" ]] || return 0
+  changed="$(printf '%s\n' "$tracked" | tr '\n' '\0' | xargs -0 "${git[@]}" diff --relative --name-only -- | sort)"
+  unchanged="$(comm -23 <(printf '%s\n' "$tracked") <(printf '%s\n' "$changed") | sed '/^$/d')"
+  [[ -n "$unchanged" ]] || return 0
+  printf '%s\n' "$unchanged" | tr '\n' '\0' | xargs -0 "${git[@]}" add -- \
+    || log_error "could not refresh git's index after writing blocks (is another git command running?)"
+}
+
+# Prints "path<TAB>hash" for every file whose note is missing or was written for other content
+deepgraph_pending() {
+  "$DEEPGRAPH_BIN" pending "$STATE_DIR" --notes "$NOTES_FILE"
+}
+
+# --- git clean filter -------------------------------------------------------------------------------------------------
+# The @sourcemap blocks exist only in the working tree: a clean filter strips them whenever git reads a file, so they never
+# reach the index, commits or `git diff`, and a block-only change shows as no change at all. Configured locally only
+# (.git/info/attributes and .git/config), so nothing is committed and teammates are unaffected.
+# `required = true` makes git fail loudly rather than commit a block if the filter ever can't run.
+
+_git_common_dir() {
+  local root="$1" dir
+  dir="$(git -C "$root" rev-parse --git-common-dir 2>/dev/null)" || return 1
+  (cd "$root" && cd "$dir" && pwd)
+}
+
+# Blocks are written only when this succeeds, i.e. in a git work tree where the filter is set up and proven to work.
+# Refuses when another attribute already routes one of our file types through a filter (e.g. Git LFS): a path takes a single
+# filter, and ours (in info/attributes, which has the highest precedence) would silently replace it.
+# Usage: setup_git_filter <root_dir>
+setup_git_filter() {
+  local root="$1" common attrs ext conflicts section current wanted expected
+  command -v git >/dev/null 2>&1 || return 1
+  git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  common="$(_git_common_dir "$root")" || return 1
+  attrs="$common/info/attributes"
+
+  local ext_re
+  ext_re="$(printf '%s' "$SOURCEMAP_EXTS" | tr ' ' '|')"
+  conflicts="$(
+    {
+      git -C "$root" ls-files -z --full-name -- ':(top)*.gitattributes' 2>/dev/null \
+        | (cd "$(git -C "$root" rev-parse --show-toplevel)" && xargs -0 cat 2>/dev/null)
+      [[ -f "$attrs" ]] && sed '/^# >>> sourcemap/,/^# <<< sourcemap/d' "$attrs"
+    } | grep -E '(^|[[:space:]])filter=' | grep -v 'filter=sourcemap' \
+      | awk '{print $1}' | grep -E "(\.($ext_re)|\*)\$" | sort -u
+  )"
+  if [[ -n "$conflicts" ]]; then
+    log_error "blocks disabled: other git filters apply to supported file types ($(paste -sd ' ' - <<<"$conflicts"))"
+    return 1
+  fi
+
+  section="# >>> sourcemap (generated: strips the local @sourcemap blocks before git reads a file)"$'\n'
+  for ext in $SOURCEMAP_EXTS; do section+="*.$ext filter=sourcemap"$'\n'; done
+  section+="# <<< sourcemap"
+  current="$(cat "$attrs" 2>/dev/null)"
+  wanted="$(sed '/^# >>> sourcemap/,/^# <<< sourcemap/d' <<<"$current")"
+  wanted="${wanted:+$wanted$'\n'}$section"
+  if [[ "$current" != "$wanted" ]]; then
+    mkdir -p "$common/info" && printf '%s\n' "$wanted" > "$attrs.tmp" && mv "$attrs.tmp" "$attrs" \
+      || { log_error "could not write $attrs"; return 1; }
+  fi
+
+  expected="'$DEEPGRAPH_BIN' clean %f"
+  if [[ "$(git -C "$root" config --local --get filter.sourcemap.clean)" != "$expected" ]]; then
+    git -C "$root" config --local filter.sourcemap.clean "$expected" || return 1
+  fi
+  if [[ "$(git -C "$root" config --local --get filter.sourcemap.required)" != "true" ]]; then
+    git -C "$root" config --local filter.sourcemap.required true || return 1
+  fi
+
+  # Proof, through git itself, that a file with a block hashes exactly like the same file without one
+  local with without
+  with="$(printf 'x\n\n/* @sourcemap (generated; do not edit)\n * @dependents: none\n * @end-sourcemap */\n' \
+    | git -C "$root" hash-object --stdin --path=sourcemap-probe.ts 2>&1)"
+  without="$(printf 'x\n' | git -C "$root" hash-object --stdin --no-filters)"
+  if [[ "$with" != "$without" ]]; then
+    log_error "blocks disabled: the git clean filter isn't working ($with)"
     return 1
   fi
 }
 
-# Prints "path<TAB>hash" for every file whose note is missing (empty ctx) or stale (ctx_hash no longer matches the file's content hash)
-# Usage: enumerate_pending <sourcemap_dir>
-enumerate_pending() {
-  local dir="$1"
-  jq -r --slurpfile g "$dir/graph.json" '
-    ($g[0].nodes) as $n
-    | to_entries[]
-    | select($n[.key] != null)
-    | select(.value.ctx == "" or .value.ctx_hash != $n[.key].hash)
-    | "\(.key)\t\($n[.key].hash)"
-  ' "$dir/ctx.json"
+# Cheap check (for the hooks) that blocks are on for this project: setup_git_filter configured the filter
+headers_enabled() {
+  [[ "$(git -C "$1" config --local --get filter.sourcemap.clean 2>/dev/null)" == "'$DEEPGRAPH_BIN' clean %f" ]]
+}
+
+# Undoes setup_git_filter
+# Usage: remove_git_filter <root_dir>
+remove_git_filter() {
+  local root="$1" common attrs rest
+  common="$(_git_common_dir "$root")" || return 0
+  attrs="$common/info/attributes"
+  if [[ -f "$attrs" ]]; then
+    rest="$(sed '/^# >>> sourcemap/,/^# <<< sourcemap/d' "$attrs")"
+    if [[ -n "$rest" ]]; then printf '%s\n' "$rest" > "$attrs"; else rm -f "$attrs"; fi
+  fi
+  git -C "$root" config --local --remove-section filter.sourcemap 2>/dev/null || true
 }
 
 # mkdir is atomic on both macOS and Linux, so it doubles as a cheap lock.

@@ -1,10 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
-use std::hash::{Hash, Hasher};
+use std::borrow::Cow;
 use std::path::Path;
 
 use tree_sitter::{Parser, Tree};
 
 use crate::facts::{DepRef, Dependency, FileFacts, ImportWant};
+use crate::header;
 use crate::lang::{java, js_pkg, js_ts, markdown, python, ts_paths};
 use crate::model::{Graph, Node};
 use crate::walk::{Lang, SourceFile};
@@ -49,10 +50,14 @@ struct BuildNode {
     wildcard_fallbacks: Vec<DepRef>,
 }
 
-fn content_hash(bytes: &[u8]) -> String {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+/// A file's content without its `@sourcemap` block: everything (parsing,
+/// hashing) works on this, so the block never affects the graph.
+fn read_source(path: &Path, lang: Lang) -> std::io::Result<String> {
+    let raw = std::fs::read_to_string(path)?;
+    Ok(match header::strip(&raw, lang) {
+        Cow::Borrowed(_) => raw,
+        Cow::Owned(stripped) => stripped,
+    })
 }
 
 fn split_deps(
@@ -129,7 +134,7 @@ pub fn build_graph(root: &Path, files: &[SourceFile], opts: &GraphOptions) -> an
     let mut java_index = java::JavaIndex::default();
 
     for f in files.iter().filter(|f| f.lang == Lang::Java) {
-        let src = std::fs::read_to_string(&f.abs_path)?;
+        let src = read_source(&f.abs_path, f.lang)?;
         let Some(tree) = java_parser.parse(&src, None) else {
             continue;
         };
@@ -148,12 +153,12 @@ pub fn build_graph(root: &Path, files: &[SourceFile], opts: &GraphOptions) -> an
     for pj in &parsed_java {
         let imports = java::scan_imports(&pj.tree, pj.src.as_bytes());
         let facts = java::resolve(&imports, &pj.header.types, &pj.rel, &java_index);
-        let hash = content_hash(pj.src.as_bytes());
+        let hash = header::content_hash(&pj.src);
         build_nodes.insert(pj.rel.clone(), make_build_node(hash, facts, &pj.rel, false));
     }
 
     for f in files.iter().filter(|f| f.lang != Lang::Java) {
-        let src = std::fs::read_to_string(&f.abs_path)?;
+        let src = read_source(&f.abs_path, f.lang)?;
         let importer_dir = f
             .abs_path
             .parent()
@@ -196,7 +201,7 @@ pub fn build_graph(root: &Path, files: &[SourceFile], opts: &GraphOptions) -> an
         };
 
         let is_barrel = facts.has_reexports && !facts.has_local_exports;
-        let hash = content_hash(src.as_bytes());
+        let hash = header::content_hash(&src);
         build_nodes.insert(f.rel_path.clone(), make_build_node(hash, facts, &f.rel_path, is_barrel));
     }
 
@@ -291,19 +296,35 @@ pub fn build_graph(root: &Path, files: &[SourceFile], opts: &GraphOptions) -> an
         }
     }
 
-    let mut effective_dependencies: HashMap<String, BTreeSet<String>> = HashMap::new();
-    for (rel, node) in &build_nodes {
-        let mut result: BTreeSet<String> = BTreeSet::new();
-        let mut visited: HashSet<(String, Want)> = HashSet::new();
-        let mut queue: VecDeque<(String, Want)> = VecDeque::new();
-        for (target, want) in &node.dependency_wants {
-            for w in seed_wants(want) {
-                queue.push_back((target.clone(), w));
-            }
-        }
+    /// True when every file a barrel re-exports from is accounted for in
+    /// its `name_sources`, i.e. its exported names are fully known, so a
+    /// name missing from them is certainly not exported by it.
+    fn surface_known(barrel: &BuildNode) -> bool {
+        barrel.wildcard_fallbacks.is_empty()
+            && barrel.dependency_wants.iter().all(|(t, _)| {
+                barrel.name_sources.values().any(|d| matches!(d, DepRef::Internal(p) if p == t))
+            })
+    }
 
+    /// Follows one import edge of `importer` through any barrels, adding
+    /// the real files it lands on to `result`. Returns whether it resolved
+    /// at all (reached a file, or a third-party re-export).
+    fn follow(
+        importer: &str,
+        start: &str,
+        want: Want,
+        build_nodes: &BTreeMap<String, BuildNode>,
+        result: &mut BTreeSet<String>,
+    ) -> bool {
+        let mut resolved = false;
+        let mut visited: HashSet<(String, Want)> = HashSet::new();
+        let mut queue: VecDeque<(String, Want)> = VecDeque::from([(start.to_string(), want)]);
         while let Some((path, want)) = queue.pop_front() {
-            if path == *rel || !visited.insert((path.clone(), want.clone())) {
+            if path == importer {
+                resolved = true;
+                continue;
+            }
+            if !visited.insert((path.clone(), want.clone())) {
                 continue;
             }
             let Some(target_node) = build_nodes.get(&path) else {
@@ -311,6 +332,7 @@ pub fn build_graph(root: &Path, files: &[SourceFile], opts: &GraphOptions) -> an
             };
             if !target_node.is_barrel {
                 result.insert(path);
+                resolved = true;
                 continue;
             }
             match &want {
@@ -327,20 +349,43 @@ pub fn build_graph(root: &Path, files: &[SourceFile], opts: &GraphOptions) -> an
                         // (internal-only), so it's dropped here. Still
                         // visible on the barrel's own node if kept via
                         // `--with-barrels`.
+                        resolved = true;
                     }
-                    None if !target_node.wildcard_fallbacks.is_empty() => {
+                    None => {
                         for fb in &target_node.wildcard_fallbacks {
                             if let DepRef::Internal(p) = fb {
                                 queue.push_back((p.clone(), Want::Name(name.clone())));
                             }
                         }
-                    }
-                    None => {
-                        for (t, _) in &target_node.dependency_wants {
-                            queue.push_back((t.clone(), Want::All));
+                        // A barrel whose names are all known simply doesn't
+                        // export this one (e.g. `domain/index.ts` doing
+                        // `export * from './model'` and `export * from
+                        // './service'`, asked for a service: `model/` is
+                        // no dependency). Otherwise it can't be narrowed.
+                        if target_node.wildcard_fallbacks.is_empty() && !surface_known(target_node) {
+                            for (t, _) in &target_node.dependency_wants {
+                                queue.push_back((t.clone(), Want::All));
+                            }
                         }
                     }
                 },
+            }
+        }
+        resolved
+    }
+
+    let mut effective_dependencies: HashMap<String, BTreeSet<String>> = HashMap::new();
+    for (rel, node) in &build_nodes {
+        let mut result: BTreeSet<String> = BTreeSet::new();
+        for (target, want) in &node.dependency_wants {
+            for w in seed_wants(want) {
+                let by_name = matches!(w, Want::Name(_));
+                // A name found nowhere (an export form the extractor
+                // doesn't recognize) falls back to everything behind the
+                // barrel: fail safe rather than lose the edge.
+                if !follow(rel, target, w, &build_nodes, &mut result) && by_name {
+                    follow(rel, target, Want::All, &build_nodes, &mut result);
+                }
             }
         }
         effective_dependencies.insert(rel.clone(), result);
@@ -420,4 +465,57 @@ pub fn build_graph(root: &Path, files: &[SourceFile], opts: &GraphOptions) -> an
         generated_at: crate::time_fmt::now_iso8601(),
         nodes,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Writes `files` into a fresh temp dir and builds its default graph.
+    fn graph_of(name: &str, files: &[(&str, &str)]) -> Graph {
+        let root = std::env::temp_dir().join(format!("deepgraph-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (path, content) in files {
+            let abs = root.join(path);
+            std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+            std::fs::write(abs, content).unwrap();
+        }
+        let root = root.canonicalize().unwrap();
+        let sources = crate::walk::collect_source_files(&root, &globset::GlobSet::empty()).unwrap();
+        let graph = build_graph(&root, &sources, &GraphOptions::default()).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        graph
+    }
+
+    #[test]
+    fn named_import_through_nested_wildcard_barrels_lands_on_its_file_only() {
+        let g = graph_of(
+            "nested",
+            &[
+                ("domain/index.ts", "export * from './model';\nexport * from './service';\n"),
+                ("domain/model/index.ts", "export * from './A';\nexport * from './B';\n"),
+                ("domain/model/A.ts", "export class A {}\n"),
+                ("domain/model/B.ts", "export class B {}\n"),
+                ("domain/service/index.ts", "export * from './S';\n"),
+                ("domain/service/S.ts", "export class S {}\n"),
+                ("App.ts", "import { S } from './domain';\n"),
+            ],
+        );
+        assert_eq!(g.nodes["App.ts"].dependencies, vec!["domain/service/S.ts"]);
+        assert!(g.nodes["domain/model/A.ts"].dependents.is_empty());
+    }
+
+    #[test]
+    fn name_found_nowhere_keeps_every_file_behind_the_barrel() {
+        let g = graph_of(
+            "unknown",
+            &[
+                ("lib/index.ts", "export * from './A';\nexport * from './B';\n"),
+                ("lib/A.ts", "export class A {}\n"),
+                ("lib/B.ts", "export class B {}\n"),
+                ("App.ts", "import { Missing } from './lib';\n"),
+            ],
+        );
+        assert_eq!(g.nodes["App.ts"].dependencies, vec!["lib/A.ts", "lib/B.ts"]);
+    }
 }

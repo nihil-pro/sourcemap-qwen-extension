@@ -17,22 +17,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scout-hint.sh",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/hint.sh",
             "name": "sourcemap-hint",
             "timeout": 2000
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "^agent$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scout-result.sh",
-            "name": "sourcemap-scout-result",
-            "timeout": 5000
           }
         ]
       }
@@ -44,7 +31,7 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/sync-stale.sh",
             "name": "sourcemap-stop",
-            "timeout": 2000
+            "timeout": 10000
           }
         ]
       }

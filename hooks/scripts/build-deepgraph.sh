@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Builds the vendored deepgraph (<extension>/deepgraph) with cargo and installs the binary into <extension>/bin.
+# Builds the vendored deepgraph (<extension>/deepgraph) with cargo and installs the binary into $SOURCEMAP_HOME/bin.
 # qwen-code has no postinstall hook, so this runs from annotate.sh, in the background of the first session after install.
 
-# No-op when the binary is already there and was built with the feature set the current settings ask for (see lib.sh's DEEPGRAPH_STAMP).
+# No-op when the binary is already there and was built from the current sources (see lib.sh's DEEPGRAPH_STAMP).
 # Two sessions starting together both land here; the second waits for the first's build instead of starting its own.
 # On failure, leaves DEEPGRAPH_BUILD_FAILED behind so bootstrap.sh can tell the user once, instead of failing silently forever.
 
@@ -20,9 +20,9 @@ init_error_log "$ROOT_DIR"
 load_settings "$ROOT_DIR"
 deepgraph_is_built && exit 0
 
-mkdir -p "$EXT_BIN_DIR"
-LOCK_DIR="$EXT_BIN_DIR/.build.lock"
-# A release build from scratch takes a few minutes (longer with the embeddings features): wait up to 30 min
+mkdir -p "$DEEPGRAPH_BIN_DIR"
+LOCK_DIR="$DEEPGRAPH_BIN_DIR/.build.lock"
+# A release build from scratch takes a few minutes: wait up to 30 min
 wait_lock "$LOCK_DIR" 1800 1 || { log_error "timed out waiting for another deepgraph build ($LOCK_DIR)"; exit 1; }
 trap 'release_lock "$LOCK_DIR"' EXIT
 
@@ -40,9 +40,8 @@ fail() {
 command -v cargo >/dev/null 2>&1 || PATH="$HOME/.cargo/bin:$PATH"
 command -v cargo >/dev/null 2>&1 || fail "cargo not found (is Rust installed?)"
 
-features="$(deepgraph_features)"
+stamp="$(deepgraph_source_stamp)"
 args=(build --release --locked --manifest-path "$DEEPGRAPH_SRC/Cargo.toml")
-[[ -n "$features" ]] && args+=(--features "$features")
 
 # The full cargo output goes to its own build log; error.log gets its tail, which is where cargo's error summary is
 if ! cargo "${args[@]}" > "$DEEPGRAPH_BUILD_LOG" 2>&1; then
@@ -52,5 +51,5 @@ fi
 
 cp "$DEEPGRAPH_SRC/target/release/deepgraph" "$DEEPGRAPH_BIN.tmp" && mv "$DEEPGRAPH_BIN.tmp" "$DEEPGRAPH_BIN" \
   || fail "could not install $DEEPGRAPH_BIN"
-printf '%s' "$features" > "$DEEPGRAPH_STAMP"
+printf '%s' "$stamp" > "$DEEPGRAPH_STAMP"
 rm -f "$DEEPGRAPH_BUILD_FAILED"

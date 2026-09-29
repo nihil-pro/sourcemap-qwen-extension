@@ -9,7 +9,7 @@ pub struct SearchHit {
 }
 
 /// One searchable file: its path, exported names, and note (if any),
-/// joined into the text both fuzzy and semantic search match against.
+/// joined into the text search matches against.
 /// Including path and exports means a file is findable even before it
 /// has a note (or when notes aren't written at all), and a note adds to
 /// that rather than being the only signal.

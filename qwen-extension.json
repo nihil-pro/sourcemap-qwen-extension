@@ -1,23 +1,11 @@
 {
   "name": "sourcemap",
-  "version": "1.0.0",
-  "description": "Maintains a bidirectional-graph of the project's files relationships with LLM-fillable context notes. Keeps it in sync with the filesystem, and helps the agent scope which files are relevant to a task via a lightweight subagent.",
+  "version": "1.1.3",
+  "description": "Appends a local-only @sourcemap comment to each project file (what it does, which files depend on it), so the agent finds files with its own grep and sees what a change can break when it reads one. Notes are LLM-written in the background and shared through git; the comments never reach git.",
   "settings": [
     {
-      "name": "ONNX Runtime library",
-      "description": "Absolute path to a local ONNX Runtime library (dylib/so) for deepgraph's offline semantic search. Leave empty to build deepgraph without semantic search.",
-      "envVar": "SOURCEMAP_ONNX_RUNTIME",
-      "sensitive": false
-    },
-    {
-      "name": "Embedding model directory",
-      "description": "Absolute path to a local embedding model directory, e.g. Xenova/all-MiniLM-L6-v2. Leave empty if not using semantic search.",
-      "envVar": "SOURCEMAP_MODEL_DIR",
-      "sensitive": false
-    },
-    {
       "name": "LLM annotation",
-      "description": "true (default): qwen writes a one-sentence note per file in the background, which makes search much better but uses your qwen quota (roughly one call per 10 files, then only for changed files). false: no LLM calls; search matches file paths and exported names only.",
+      "description": "true (default): qwen writes a one-sentence note per file in the background (roughly one call per 10 files, then only for changed files; notes are committed in .qwen/sourcemap/notes.jsonl, so a team pays once). false: no LLM calls; the comments list dependents only.",
       "envVar": "SOURCEMAP_ANNOTATE",
       "sensitive": false
     },

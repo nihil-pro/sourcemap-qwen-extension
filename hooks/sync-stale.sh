@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # Stop hook.
-# Keeps graph.json/ctx.json in sync with the filesystem after each turn by re-running `deepgraph build`,
-# which is fast enough to do synchronously (static analysis only, no LLM).
+# Keeps the sourcemap in sync with the filesystem after each turn by re-running `deepgraph build`, which is fast enough to do
+# synchronously (static analysis only, no LLM): regenerates graph.json and, when blocks are on for this project, rewrites the
+# @sourcemap block of every file whose note or dependents changed. This is the main place blocks get updated: the agent is
+# between turns, so it isn't editing files right now.
 
-# In a git repo, only runs when `git status --porcelain` shows any change;
+# In a git repo, only runs when `git status --porcelain` shows any change (block-only changes never show, see the clean filter);
 # without git (or outside a repo), always runs.
 
 # Only surfaces a systemMessage to the user when files were added or removed; a no-op sync stays silent.
 
-# Then, if any file's note is missing or stale (its content hash moved since the note was written),
-# spawns annotate.sh in the BACKGROUND to (re)write exactly those notes, so a content refresh never delays this turn.
-# Staleness comes from deepgraph's content hashes, so it covers every change, not just the ones made through the agent's own edit tools.
+# Then, if any file has no current note, spawns annotate.sh in the BACKGROUND to write exactly those notes, so annotation never
+# delays this turn. Staleness comes from deepgraph's content hashes, so it covers every change, not just the agent's own edits.
 
 # Does nothing until bootstrap.sh's background run has built deepgraph and the first graph.
 
@@ -27,8 +28,9 @@ ANNOTATE_SCRIPT="$HOOK_DIR/scripts/annotate.sh"
 # shellcheck source=scripts/lib.sh
 source "$LIB_SCRIPT"
 
-OUT_DIR="$ROOT_DIR/$SOURCEMAP_REL_DIR"
-[[ -x "$DEEPGRAPH_BIN" && -f "$OUT_DIR/graph.json" && -f "$OUT_DIR/ctx.json" ]] || exit 0
+project_paths "$ROOT_DIR"
+GRAPH="$STATE_DIR/graph.json"
+[[ -x "$DEEPGRAPH_BIN" && -f "$GRAPH" ]] || exit 0
 init_error_log "$ROOT_DIR" || exit 0
 
 if [[ -d "$ROOT_DIR/.git" ]] && command -v git >/dev/null 2>&1; then
@@ -37,17 +39,20 @@ fi
 
 load_settings "$ROOT_DIR"
 
-# annotate.sh only holds this lock for a single ctx.json write; if it can't be had within ~1s, skip this turn's sync
+headers=()
+headers_enabled "$ROOT_DIR" && headers=(--headers)
+
+# annotate.sh only holds this lock for a single notes write; if it can't be had within ~1s, skip this turn's sync
 # rather than risk the hook timeout; the next Stop (or session start) catches up.
-WRITE_LOCK="$OUT_DIR/.write.lock"
+WRITE_LOCK="$STATE_DIR/.write.lock"
 wait_lock "$WRITE_LOCK" 20 || exit 0
 trap 'release_lock "$WRITE_LOCK"' EXIT
 
-before="$(jq -r 'keys[]' "$OUT_DIR/ctx.json")"
+before="$(jq -r '.nodes | keys[]' "$GRAPH")"
 # deepgraph_build logs its own failures
-deepgraph_build "$ROOT_DIR" || exit 0
-after="$(jq -r 'keys[]' "$OUT_DIR/ctx.json")"
-pending="$(enumerate_pending "$OUT_DIR")"
+deepgraph_build "$ROOT_DIR" ${headers[@]+"${headers[@]}"} || exit 0
+after="$(jq -r '.nodes | keys[]' "$GRAPH")"
+pending="$(deepgraph_pending)"
 
 release_lock "$WRITE_LOCK"
 trap - EXIT

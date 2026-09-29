@@ -1,36 +1,51 @@
 # sourcemap
-A qwen-code extension that maintains a bidirectional dependency graph of the project's files and provides a sourcemap-scout subagent that finds the files relevant to a given task. 
-Each file it finds includes a list of its dependents, which helps the main agent make fewer mistakes: it never forgets to check whether changes to one file break others, and, most importantly, 
-it spends its budget thinking about the task rather than about where the related files are and how to find them.
+A qwen-code extension that appends a small comment block to the end of each project file: what the file does, and which files depend on it.
+```ts
+/* @sourcemap (generated; do not edit)
+ * @ctx: Enqueue and close events for snackbar notifications.
+ * @dependents: businesses/src/utils/Notification.dispatcher.ts
+ * @end-sourcemap */
+```
+The agent doesn't need a new tool or a subagent to use it. Its own grep finds files by what they do: `@ctx:.*aircraft` returns one description line per file, instead of every line of code mentioning aircraft, and whenever it reads a file, it sees what a change could break.
+So it spends its budget on the task rather than on finding related files, and it doesn't forget to check the files that depend on the one it changes.
 
-This extension is based mostly on static analysis, rather than on LLM judgment, that's why it Requires Rust. 
-It comes with vendored [deepgraph](deepgraph/README.md) that will be built in the background on the first session start after install.
+The blocks never reach git: a local git clean filter strips them whenever git reads a file, so `git status`, `git diff` and commits don't see them, and teammates are unaffected.
+The notes (`ctx`) are written by the LLM in the background and committed in `.qwen/sourcemap/notes.jsonl`, so a team pays for each note once.
 
-LLM annotation is an opt-in feature, that writes a one-sentence note per file in the background, using your qwen quota, and makes the search for relevant files even more accurate.
+Dependencies come from static analysis rather than LLM judgment, which is why the extension requires Rust. It ships a vendored [deepgraph](deepgraph/README.md), built in the background on the first session start after install.
+
+## How it works
+- **Session start**, in the background:
+  1. builds deepgraph if needed;
+  2. sets up the git filter;
+  3. scans the project and updates the blocks;
+  4. annotates files without a current note.
+- **End of each agent turn** (Stop hook): rescans, updates the blocks of changed files and their dependents, and annotates new or changed files in the background.
+- **The first prompt of each session** gets a short hint telling the agent what the blocks are, and never to edit them.
+
+Blocks are only written in a git work tree, once the filter is set up and verified. They're skipped entirely if another git filter (e.g. Git LFS) already applies to one of the supported file types.
+
+## Files
+| What | Where | Committed |
+|---|---|---|
+| Notes, plus their union-merge `.gitattributes` | `<project>/.qwen/sourcemap/` | yes (make sure `.qwen/` isn't gitignored) |
+| Blocks | end of each supported file | never (stripped by the filter) |
+| Filter config | `.git/info/attributes` and `.git/config` | no (local) |
+| Graph, error log, locks | `~/.qwen/sourcemap/projects/<project>-<id>/` | no |
+| deepgraph binary, build log | `~/.qwen/sourcemap/` | no |
 
 ## Settings
 Asked at install time, and may be changed later with `qwen extensions settings set sourcemap <setting>`:
-- ONNX Runtime: Absolute path to a local `libonnxruntime` (dylib/so), for offline semantic search via local embedding model. If omitted, `deepgraph` defaults to fuzzy search only.
-- Embedding model directory: Absolute path to a local embedding model directory with model.onnx, tokenizer.json etc. The [MiniLM-L12-V2](https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2/tree/main) is recommended.
-- LLM annotation: Project files collected by `deepgraph` will be annotated in background based on their contents. Defaults to true.
-- Exclude patterns: While `deepgraph` already respects .gitignore, .agentignore and many others non-code related, such as `node_modules`, you can pass an additional comma-separated `gitignore-style` globs to leave out of the sourcemap
-- OpenAI API logging: `true` passes `--openai-logging` to the extension's background qwen calls
+- LLM annotation: `true` (default) writes a one-sentence note per file in the background, using your qwen quota. `false`: the blocks carry dependents only.
+- Exclude patterns: comma-separated gitignore-style globs to leave out. `.gitignore` and non-code directories such as `node_modules` are already skipped.
+- OpenAI API logging: `true` passes `--openai-logging` to the extension's background qwen calls.
 
-## Search
-Both fuzzy and semantic search match each file's path, exported names, and note (when it has one), so a file is findable even before it's annotated. 
-Semantic search caches each file's embedding, and only re-embeds files whose path, exports or note changed. 
-The scout agent runs semantic search when deepgraph was built with it and a model directory is set, and fuzzy search otherwise, including cases where semantic search fails.
-
-## Letting the scout run without approval prompts
-The scout calls deepgraph through `.qwen/sourcemap/deepgraph` with `run_shell_command`, which needs approval in the Ask Permissions and Auto-Edit modes. 
-To auto-approve just that command, add to user or project`.qwen/settings.json`:
-```json
-{
-  "permissions": {
-    "allow": ["Bash(.qwen/sourcemap/deepgraph *)"]
-  }
-}
+## Uninstall
+qwen-code has no uninstall hook, so before uninstalling the extension, run this in every project it was used in:
+```sh
+<extension dir>/hooks/scripts/uninstall.sh <project dir>
 ```
+It removes the blocks and the git filter. If the filter is left configured without its binary, git refuses to add files, by design, so that a block can never be committed silently.
 
 ## Troubleshooting
-Errors from every hook and background script go to project `.qwen/sourcemap/error.log`; deepgraph's full build output is in the extension's `bin/build.log`.
+Errors from every hook and background script go to `~/.qwen/sourcemap/projects/<project>-<id>/error.log`. deepgraph's build output is in `~/.qwen/sourcemap/build.log`.
