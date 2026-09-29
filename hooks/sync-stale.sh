@@ -27,6 +27,7 @@ ANNOTATE_SCRIPT="$HOOK_DIR/scripts/annotate.sh"
 [[ -f "$LIB_SCRIPT" ]] || exit 0
 # shellcheck source=scripts/lib.sh
 source "$LIB_SCRIPT"
+ROOT_DIR="$(project_root "$ROOT_DIR")"
 
 project_paths "$ROOT_DIR"
 GRAPH="$STATE_DIR/graph.json"

@@ -23,6 +23,8 @@ Dependencies come from static analysis rather than LLM judgment, which is why th
 - **End of each agent turn** (Stop hook): rescans, updates the blocks of changed files and their dependents, and annotates new or changed files in the background.
 - **The first prompt of each session** gets a short hint telling the agent what the blocks are, and never to edit them.
 
+The project is the whole git repository, even when qwen is started in one of its subdirectories, so there's one set of notes per repository.
+
 Blocks are only written in a git work tree, once the filter is set up and verified. They're skipped entirely if another git filter (e.g. Git LFS) already applies to one of the supported file types.
 
 ## Files

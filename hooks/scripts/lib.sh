@@ -28,6 +28,15 @@ DEEPGRAPH_BUILD_FAILED="$SOURCEMAP_HOME/.build-failed"
 # The file types deepgraph writes @sourcemap blocks into (walk.rs's detect_lang), for the git attributes
 SOURCEMAP_EXTS="java py pyi js jsx mjs cjs ts mts cts tsx md markdown"
 
+# The sourcemap covers a whole git repository, whichever of its subdirectories qwen was started in: a session in a
+# subdirectory treated as its own project would keep a second set of notes (paying for them again) and rewrite the same
+# files' blocks with paths relative to itself, fighting a session started at the repository root. Outside git, it's the
+# directory itself.
+# Usage: ROOT_DIR="$(project_root <dir>)"
+project_root() {
+  git -C "$1" rev-parse --show-toplevel 2>/dev/null || (cd "$1" && pwd)
+}
+
 # Sets STATE_DIR (this project's local, disposable data: graph.json, error.log, locks) and NOTES_FILE.
 # The state dir is named after the project's directory plus a checksum of its full path, so two projects never share one.
 # Usage: project_paths <root_dir>
@@ -72,14 +81,16 @@ _read_env_key() {
 
 # Loads the settings asked for at install time (see qwen-extension.json's "settings").
 # qwen-code passes those only to MCP servers, never to hook processes, so they're read straight from where it stores them:
-# the user-scope file inside the extension dir, overridden by the workspace-scope .env in the project root.
+# the user-scope file inside the extension dir, overridden by the workspace-scope .env in the directory qwen was started in
+# (which may be a subdirectory of the project root, see project_root), or else in the project root.
 # A variable already set in the environment wins over both.
 # Usage: load_settings <root_dir>
 load_settings() {
   local root="$1" key val
   for key in SOURCEMAP_EXCLUDE SOURCEMAP_OPENAI_LOGGING SOURCEMAP_ANNOTATE; do
     [[ -n "${!key:-}" ]] && continue
-    val="$(_read_env_key "$root/.env" "$key")" || val="$(_read_env_key "$EXT_DIR/.env" "$key")" || val=""
+    val="$(_read_env_key "${QWEN_PROJECT_DIR:-$root}/.env" "$key")" || val="$(_read_env_key "$root/.env" "$key")" \
+      || val="$(_read_env_key "$EXT_DIR/.env" "$key")" || val=""
     printf -v "$key" '%s' "$val"
     export "${key?}"
   done

@@ -49,6 +49,7 @@ ROOT_DIR="$(cd "${1:?root_dir required}" && pwd)" || exit 0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 source "$SCRIPT_DIR/lib.sh"
+ROOT_DIR="$(project_root "$ROOT_DIR")"
 init_error_log "$ROOT_DIR" || exit 0
 load_settings "$ROOT_DIR"
 

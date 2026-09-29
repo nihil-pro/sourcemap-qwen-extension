@@ -13,6 +13,7 @@ ROOT_DIR="$(cd "${1:-.}" && pwd)" || exit 1
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 source "$SCRIPT_DIR/lib.sh"
+ROOT_DIR="$(project_root "$ROOT_DIR")"
 project_paths "$ROOT_DIR"
 
 if [[ ! -x "$DEEPGRAPH_BIN" ]]; then

@@ -19,6 +19,7 @@ LIB_SCRIPT="$SCRIPT_DIR/scripts/lib.sh"
 [[ -f "$LIB_SCRIPT" ]] || exit 0
 # shellcheck source=scripts/lib.sh
 source "$LIB_SCRIPT"
+ROOT_DIR="$(project_root "$ROOT_DIR")"
 
 # No blocks until the first background annotate.sh run has set up the git filter and written them
 headers_enabled "$ROOT_DIR" || exit 0

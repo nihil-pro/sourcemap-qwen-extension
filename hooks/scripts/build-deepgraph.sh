@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 source "$SCRIPT_DIR/lib.sh"
 
-ROOT_DIR="${1:-$(pwd)}"
+ROOT_DIR="$(project_root "${1:-$(pwd)}")"
 init_error_log "$ROOT_DIR"
 load_settings "$ROOT_DIR"
 deepgraph_is_built && exit 0

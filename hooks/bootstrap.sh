@@ -20,6 +20,7 @@ ANNOTATE_SCRIPT="$SCRIPT_DIR/scripts/annotate.sh"
 [[ -f "$LIB_SCRIPT" && -x "$ANNOTATE_SCRIPT" ]] || exit 0
 # shellcheck source=scripts/lib.sh
 source "$LIB_SCRIPT"
+ROOT_DIR="$(project_root "$ROOT_DIR")"
 init_error_log "$ROOT_DIR" || exit 0
 
 # A failed deepgraph build would otherwise leave the sourcemap silently missing; tell the user (it's retried below regardless)

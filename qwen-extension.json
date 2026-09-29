@@ -1,6 +1,6 @@
 {
   "name": "sourcemap",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "Appends a local-only @sourcemap comment to each project file (what it does, which files depend on it), so the agent finds files with its own grep and sees what a change can break when it reads one. Notes are LLM-written in the background and shared through git; the comments never reach git.",
   "settings": [
     {
