@@ -23,6 +23,51 @@ Dependencies come from static analysis rather than LLM judgment, which is why th
 - **End of each agent turn** (Stop hook): rescans, updates the blocks of changed files and their dependents, and annotates new or changed files in the background.
 - **The first prompt of each session** gets a short hint telling the agent what the blocks are, and never to edit them.
 
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Agent as qwen (agent)
+    participant Hooks as Hooks<br/>bootstrap / hint / sync-stale
+    participant Annotate as annotate.sh<br/>(background)
+    participant DG as deepgraph
+    participant LLM as qwen headless<br/>(annotator)
+    participant Repo as Project files<br/>+ notes.jsonl
+    participant Git
+
+    User->>Agent: start a session
+    Agent->>Hooks: SessionStart (bootstrap.sh)
+    Hooks-)Annotate: start in the background
+    Hooks-->>Agent: returns at once
+    Annotate->>DG: cargo build, if its sources changed
+    Annotate->>Git: set up and verify the clean/smudge filter
+    Annotate->>DG: build --notes --headers
+    DG->>Repo: tidy notes, write @sourcemap blocks<br/>(graph.json goes to ~/.qwen/sourcemap)
+    Annotate->>Git: git add files whose only change is the block
+    loop each batch of 10 files without a current note
+        Annotate->>LLM: read the files, describe each
+        LLM-->>Annotate: path + one-sentence context
+        Annotate->>DG: set-notes
+        DG->>Repo: notes.jsonl
+    end
+    Note over Annotate,LLM: a file that fails 2 runs is skipped until it changes
+
+    User->>Agent: prompt
+    Agent->>Hooks: UserPromptSubmit (hint.sh, first prompt only)
+    Hooks-->>Agent: hint: grep @ctx:.*(words), check @dependents
+    Agent->>Repo: grep "@ctx:.*(aircraft)" gives one line per file
+    Agent->>Repo: read and edit the relevant files
+    Agent->>Hooks: Stop (sync-stale.sh), end of the turn
+    alt git status shows changes
+        Hooks->>DG: build --notes --headers
+        DG->>Repo: update the blocks of changed files and their dependents
+        Hooks->>Git: refresh the index for block-only changes
+        Hooks-)Annotate: start in the background, if a file needs a note
+    end
+
+    Note over Repo,Git: git reads files through the clean filter, which strips the blocks<br/>checkout passes content through (smudge = cat)<br/>only notes.jsonl is committed
+```
+
 The project is the whole git repository, even when qwen is started in one of its subdirectories, so there's one set of notes per repository.
 
 Blocks are only written in a git work tree, once the filter is set up and verified. They're skipped entirely if another git filter (e.g. Git LFS) already applies to one of the supported file types.
