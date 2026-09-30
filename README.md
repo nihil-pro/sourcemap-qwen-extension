@@ -42,6 +42,8 @@ Asked at install time, and may be changed later with `qwen extensions settings s
 - Exclude patterns: comma-separated gitignore-style globs to leave out. `.gitignore` and non-code directories such as `node_modules` are already skipped.
 - OpenAI API logging: `true` passes `--openai-logging` to the extension's background qwen calls.
 
+A file that can't be annotated (the model fails on it, or leaves it out of its answer) is retried in at most 2 runs, then left without a note until it changes; `error.log` says which. Set `SOURCEMAP_MAX_FAILURES` in the environment to change the limit.
+
 ## Uninstall
 qwen-code has no uninstall hook, so before uninstalling the extension, run this in every project it was used in:
 ```sh

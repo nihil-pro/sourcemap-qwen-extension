@@ -93,6 +93,29 @@ release_lock "$WRITE_LOCK"
 [[ $build_status -eq 0 && -n "$pending" ]] || exit 0
 annotation_enabled || exit 0
 
+# Failure counts (see lib.sh's drop_given_up) are only kept for files still pending with the same content: an annotated
+# or changed file starts over
+FAILURES="$STATE_DIR/failures.tsv"
+if [[ -s "$FAILURES" ]]; then
+  awk -F'\t' 'FILENAME == ARGV[1] { p[$1 FS $2] = 1; next } ($1 FS $2) in p' <(printf '%s\n' "$pending") "$FAILURES" > "$FAILURES.tmp" \
+    && mv "$FAILURES.tmp" "$FAILURES"
+fi
+pending="$(drop_given_up <<<"$pending")"
+[[ -n "$pending" ]] || exit 0
+
+# Adds one failed run for each "path<TAB>hash" line in $1, and logs the files that just reached the limit
+record_failures() {
+  local failed="$1" given_up
+  [[ -n "$failed" ]] || return 0
+  touch "$FAILURES"
+  given_up="$(awk -F'\t' -v OFS='\t' -v max="$MAX_ANNOTATE_FAILURES" -v out="$FAILURES.tmp" '
+    FILENAME == ARGV[1] { n[$1 OFS $2] = $3; next }
+    NF >= 2 { k = $1 OFS $2; if (++n[k] == max) print $1 }
+    END { for (k in n) print k, n[k] > out }
+  ' "$FAILURES" <(printf '%s\n' "$failed"))" && mv "$FAILURES.tmp" "$FAILURES"
+  [[ -z "$given_up" ]] || log_error "gave up annotating after $MAX_ANNOTATE_FAILURES failed runs, until the file changes: $(paste -sd ' ' - <<<"$given_up")"
+}
+
 # Passed via --system-prompt, which *replaces* qwen's default coding-agent system prompt (one that pushes toward exploring
 # and editing the repo) and holds every instruction; the message itself is just the batch's file list.
 SYSTEM_PROMPT_FILE="$SCRIPT_DIR/../prompts/annotate.md"
@@ -190,6 +213,7 @@ run_batch() {
   done
   if [[ -z "$files_json" ]]; then
     log_error "batch skipped after 3 attempts, left pending: $(paste -sd ' ' - <<<"$path_list")"
+    record_failures "$batch"
     return 0
   fi
 
@@ -198,12 +222,24 @@ run_batch() {
   # Only paths from this batch are written (the model may invent one).
   # An empty context is never written as-is: a file without a note is re-queued, so a model with nothing to say about
   # a trivial file would otherwise get it re-queued forever. The prompt already asks for some description; this is the backstop.
-  jq -c --arg root "$ROOT_DIR/" --argjson h "$hashes" '
+  local notes_json
+  notes_json="$(jq -c --arg root "$ROOT_DIR/" --argjson h "$hashes" '
     [.[] | .path |= (ltrimstr($root) | ltrimstr("./")) | select($h[.path] != null)
      | {path, hash: $h[.path], ctx: (if (.context // "") == "" then "(no description)" else .context end)}]
-  ' <<<"$files_json" | "$DEEPGRAPH_BIN" set-notes --notes "$NOTES_FILE" \
-    || log_error "failed to write batch into $NOTES_FILE: $(paste -sd ' ' - <<<"$path_list")"
+  ' <<<"$files_json")"
+  if ! "$DEEPGRAPH_BIN" set-notes --notes "$NOTES_FILE" <<<"$notes_json"; then
+    log_error "failed to write batch into $NOTES_FILE: $(paste -sd ' ' - <<<"$path_list")"
+    release_lock "$WRITE_LOCK"
+    return 0
+  fi
   release_lock "$WRITE_LOCK"
+
+  # Files the model left out of its answer count as failed for this run
+  local omitted
+  omitted="$(awk -F'\t' 'FILENAME == ARGV[1] { if ($0 != "") done[$0] = 1; next } !($1 in done)' \
+    <(jq -r '.[].path' <<<"$notes_json") <(printf '%s\n' "$batch"))"
+  [[ -z "$omitted" ]] || log_error "the model left out, left pending: $(cut -f1 <<<"$omitted" | paste -sd ' ' -)"
+  record_failures "$omitted"
 }
 
 batch=""

@@ -275,6 +275,24 @@ remove_git_filter() {
   git -C "$root" config --local --remove-section filter.sourcemap 2>/dev/null || true
 }
 
+# --- annotation failures ----------------------------------------------------------------------------------------------
+# A file a run couldn't annotate (its batch failed all attempts, or the model left it out of its answer) stays pending, so
+# every later Stop would retry it, at up to three qwen calls each time, for as long as it keeps failing. Failed runs are
+# therefore counted per file content in $STATE_DIR/failures.tsv ("path<TAB>hash<TAB>runs"), and a file is given up after
+# SOURCEMAP_MAX_FAILURES runs (default 2) until its content changes: a new hash starts from zero.
+# Written only by annotate.sh (a per-project singleton); also read by sync-stale.sh.
+MAX_ANNOTATE_FAILURES="${SOURCEMAP_MAX_FAILURES:-2}"
+
+# Filters "path<TAB>hash" lines on stdin, dropping the files given up on
+drop_given_up() {
+  local f="$STATE_DIR/failures.tsv"
+  if [[ ! -s "$f" ]]; then
+    cat
+    return
+  fi
+  awk -F'\t' -v max="$MAX_ANNOTATE_FAILURES" 'FILENAME == ARGV[1] { if ($3 >= max) gone[$1 FS $2] = 1; next } !(($1 FS $2) in gone)' "$f" -
+}
+
 # mkdir is atomic on both macOS and Linux, so it doubles as a cheap lock.
 # The holder's pid is recorded inside, so a lock left behind by a killed process is reclaimed rather than blocking forever.
 try_lock() {

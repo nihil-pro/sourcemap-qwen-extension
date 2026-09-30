@@ -53,7 +53,8 @@ before="$(jq -r '.nodes | keys[]' "$GRAPH")"
 # deepgraph_build logs its own failures
 deepgraph_build "$ROOT_DIR" ${headers[@]+"${headers[@]}"} || exit 0
 after="$(jq -r '.nodes | keys[]' "$GRAPH")"
-pending="$(deepgraph_pending)"
+# A file annotation has given up on (see lib.sh's drop_given_up) doesn't start a run that would only skip it
+pending="$(deepgraph_pending | drop_given_up)"
 
 release_lock "$WRITE_LOCK"
 trap - EXIT
