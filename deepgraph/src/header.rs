@@ -31,6 +31,9 @@ use crate::walk::Lang;
 /// util imported by hundreds of files doesn't carry a huge block.
 const MAX_DEPENDENTS: usize = 10;
 
+/// Most exported names listed on the `@ctx:` line.
+const MAX_EXPORTS: usize = 20;
+
 /// A block is short; anything longer than this after a start marker isn't
 /// ours (or is damaged), and is left alone.
 const MAX_BLOCK_LINES: usize = 20;
@@ -87,13 +90,27 @@ pub struct HeaderInfo<'a> {
     /// file: an edit rarely changes *what* a file does, and a stale note
     /// is re-annotated soon anyway.
     pub ctx: Option<&'a str>,
+    /// Exported names (a `"*"` wildcard marker is skipped). Appended to the
+    /// `@ctx:` line, so a search by a class or function name finds the
+    /// file too, not only a search by what the note says.
+    pub exports: &'a [String],
     pub dependents: &'a [String],
 }
 
+/// `items` joined with ", ", at most `max` of them, then "(+N more)".
+fn capped_list(items: &[&str], max: usize) -> String {
+    let shown = items.iter().take(max).copied().collect::<Vec<_>>().join(", ");
+    match items.len().saturating_sub(max) {
+        0 => shown,
+        more => format!("{shown} (+{more} more)"),
+    }
+}
+
 /// The block's lines (without line endings), or `None` when there's
-/// nothing worth saying (no note and no dependents).
+/// nothing worth saying (no note, no exports and no dependents).
 pub fn render(lang: Lang, info: &HeaderInfo) -> Option<Vec<String>> {
-    if info.ctx.is_none() && info.dependents.is_empty() {
+    let exports: Vec<&str> = info.exports.iter().map(String::as_str).filter(|e| *e != "*").collect();
+    if info.ctx.is_none() && exports.is_empty() && info.dependents.is_empty() {
         return None;
     }
     let st = style(lang);
@@ -101,17 +118,18 @@ pub fn render(lang: Lang, info: &HeaderInfo) -> Option<Vec<String>> {
     // `@ctx:` and `@dependents:` are unique enough to grep for (a bare
     // `ctx:` is a common identifier, e.g. a canvas context), so
     // `@ctx:.*word` lists one description line per file.
-    if let Some(ctx) = info.ctx {
-        lines.push(format!("{}@ctx: {}", st.mid, st.sanitize(ctx)));
+    let mut ctx_line: Vec<String> = info.ctx.map(str::to_string).into_iter().collect();
+    if !exports.is_empty() {
+        ctx_line.push(format!("Exports: {}", capped_list(&exports, MAX_EXPORTS)));
+    }
+    if !ctx_line.is_empty() {
+        lines.push(format!("{}@ctx: {}", st.mid, st.sanitize(&ctx_line.join(" "))));
     }
     let deps = if info.dependents.is_empty() {
         "none".to_string()
     } else {
-        let shown = info.dependents.iter().take(MAX_DEPENDENTS).map(String::as_str).collect::<Vec<_>>().join(", ");
-        match info.dependents.len().saturating_sub(MAX_DEPENDENTS) {
-            0 => shown,
-            more => format!("{shown} (+{more} more)"),
-        }
+        let deps: Vec<&str> = info.dependents.iter().map(String::as_str).collect();
+        capped_list(&deps, MAX_DEPENDENTS)
     };
     lines.push(format!("{}@dependents: {}", st.mid, st.sanitize(&deps)));
     lines.push(st.end.to_string());
@@ -269,9 +287,9 @@ mod tests {
 
     fn infos<'a>(d: &'a [String]) -> Vec<HeaderInfo<'a>> {
         vec![
-            HeaderInfo { ctx: Some("Does a thing."), dependents: &[] },
-            HeaderInfo { ctx: Some("Does */ --> a\nthing."), dependents: d },
-            HeaderInfo { ctx: None, dependents: d },
+            HeaderInfo { ctx: Some("Does a thing."), exports: &[], dependents: &[] },
+            HeaderInfo { ctx: Some("Does */ --> a\nthing."), exports: d, dependents: d },
+            HeaderInfo { ctx: None, exports: &[], dependents: d },
         ]
     }
 
@@ -310,7 +328,7 @@ mod tests {
     #[test]
     fn block_is_at_the_end_with_file_eol() {
         let d = deps(1);
-        let block = render(Lang::TypeScript, &HeaderInfo { ctx: Some("X."), dependents: &d }).unwrap();
+        let block = render(Lang::TypeScript, &HeaderInfo { ctx: Some("X."), exports: &[], dependents: &d }).unwrap();
         assert_eq!(
             apply("a\r\n", Lang::TypeScript, Some(&block)),
             "a\r\n\r\n/* @sourcemap (generated; do not edit)\r\n * @ctx: X.\r\n * @dependents: src/dep0.ts\r\n * @end-sourcemap */\r\n"
@@ -319,7 +337,7 @@ mod tests {
 
     #[test]
     fn strips_block_with_code_appended_after_it() {
-        let block = render(Lang::JavaScript, &HeaderInfo { ctx: Some("X."), dependents: &[] }).unwrap();
+        let block = render(Lang::JavaScript, &HeaderInfo { ctx: Some("X."), exports: &[], dependents: &[] }).unwrap();
         let applied = apply("a();\n", Lang::JavaScript, Some(&block));
         let edited = format!("{applied}b();\n");
         assert_eq!(strip(&edited, Lang::JavaScript), "a();\nb();\n");
@@ -338,9 +356,20 @@ mod tests {
     #[test]
     fn caps_dependents() {
         let d = deps(13);
-        let block = render(Lang::Python, &HeaderInfo { ctx: None, dependents: &d }).unwrap();
+        let block = render(Lang::Python, &HeaderInfo { ctx: None, exports: &[], dependents: &d }).unwrap();
         assert!(block[1].ends_with("src/dep9.ts (+3 more)"), "{}", block[1]);
-        assert!(render(Lang::Python, &HeaderInfo { ctx: None, dependents: &[] }).is_none());
+        assert!(render(Lang::Python, &HeaderInfo { ctx: None, exports: &[], dependents: &[] }).is_none());
+    }
+
+    #[test]
+    fn exports_end_the_ctx_line() {
+        let exports = vec!["Timer".to_string(), "*".to_string(), "format".to_string()];
+        let with_note = render(Lang::TypeScript, &HeaderInfo { ctx: Some("Tracks time."), exports: &exports, dependents: &[] }).unwrap();
+        assert_eq!(with_note[1], " * @ctx: Tracks time. Exports: Timer, format");
+        let without_note = render(Lang::TypeScript, &HeaderInfo { ctx: None, exports: &exports, dependents: &[] }).unwrap();
+        assert_eq!(without_note[1], " * @ctx: Exports: Timer, format");
+        let wildcard_only = vec!["*".to_string()];
+        assert!(render(Lang::TypeScript, &HeaderInfo { ctx: None, exports: &wildcard_only, dependents: &[] }).is_none());
     }
 
     #[test]

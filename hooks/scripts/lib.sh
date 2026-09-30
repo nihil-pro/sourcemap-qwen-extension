@@ -187,7 +187,10 @@ deepgraph_pending() {
 # The @sourcemap blocks exist only in the working tree: a clean filter strips them whenever git reads a file, so they never
 # reach the index, commits or `git diff`, and a block-only change shows as no change at all. Configured locally only
 # (.git/info/attributes and .git/config), so nothing is committed and teammates are unaffected.
-# `required = true` makes git fail loudly rather than commit a block if the filter ever can't run.
+# `required = true` makes git fail loudly rather than commit a block if the filter ever can't run. It applies to both
+# directions, so a smudge command is needed too, even though checkout has nothing to add: with only `clean` configured, git
+# treats the missing smudge as a failed required filter, and checkout, pull, stash and branch switches fail. `cat` passes
+# the content through; the blocks come back at the end of the next turn.
 
 _git_common_dir() {
   local root="$1" dir
@@ -235,6 +238,9 @@ setup_git_filter() {
   expected="'$DEEPGRAPH_BIN' clean %f"
   if [[ "$(git -C "$root" config --local --get filter.sourcemap.clean)" != "$expected" ]]; then
     git -C "$root" config --local filter.sourcemap.clean "$expected" || return 1
+  fi
+  if [[ "$(git -C "$root" config --local --get filter.sourcemap.smudge)" != "cat" ]]; then
+    git -C "$root" config --local filter.sourcemap.smudge cat || return 1
   fi
   if [[ "$(git -C "$root" config --local --get filter.sourcemap.required)" != "true" ]]; then
     git -C "$root" config --local filter.sourcemap.required true || return 1

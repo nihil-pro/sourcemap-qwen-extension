@@ -1,8 +1,8 @@
 # sourcemap
-A qwen-code extension that appends a small comment block to the end of each project file: what the file does, and which files depend on it.
+A qwen-code extension that appends a small comment block to the end of each project file: what the file does, what it exports, and which files depend on it.
 ```ts
 /* @sourcemap (generated; do not edit)
- * @ctx: Enqueue and close events for snackbar notifications.
+ * @ctx: Enqueue and close events for snackbar notifications. Exports: CloseSnackbarEvent, EnqueueSnackbarEvent
  * @dependents: businesses/src/utils/Notification.dispatcher.ts
  * @end-sourcemap */
 ```

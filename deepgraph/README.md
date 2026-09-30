@@ -164,17 +164,17 @@ next `build --notes` keeps the note matching the file's current hash.
 
 `deepgraph headers <dir> <output-dir> --notes <file> [files...]` (or
 `build --headers`) appends a comment block to the end of each file with
-its note and its dependents (at most 10 listed):
+its note, its exported names (at most 20) and its dependents (at most 10):
 
 ```ts
 /* @sourcemap (generated; do not edit)
- * @ctx: Public barrel for the lib package.
+ * @ctx: Session token storage and refresh. Exports: TokenStore, refreshToken
  * @dependents: src/main.ts, src/app.ts
  * @end-sourcemap */
 ```
 
 Python uses `#` lines and Markdown an HTML comment. A file with neither
-a note nor dependents gets no block. A note written for other content
+a note, exports nor dependents gets no block. A note written for other content
 is still shown as is (an edit rarely changes what a file does) until
 it's re-annotated. The labels are `@`-prefixed so they
 can be grepped for without matching code: `@ctx:.*token` lists one
@@ -190,6 +190,7 @@ them whenever git reads a file:
 
 ```sh
 git config filter.sourcemap.clean 'deepgraph clean %f'
+git config filter.sourcemap.smudge cat    # required below applies to checkout too
 git config filter.sourcemap.required true
 printf '*.%s filter=sourcemap\n' java py pyi js jsx mjs cjs ts mts cts tsx md markdown >> .git/info/attributes
 ```
