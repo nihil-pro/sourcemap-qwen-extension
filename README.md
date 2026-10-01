@@ -27,45 +27,69 @@ Dependencies come from static analysis rather than LLM judgment, which is why th
 sequenceDiagram
     autonumber
     actor User
-    participant Agent as qwen (agent)
-    participant Hooks as Hooks<br/>bootstrap / hint / sync-stale
-    participant Annotate as annotate.sh<br/>(background)
+    participant Agent as gigacode
+    participant Hooks as Hooks
+    participant BG as Background
     participant DG as deepgraph
-    participant LLM as qwen headless<br/>(annotator)
-    participant Repo as Project files<br/>+ notes.jsonl
+    participant LLM as LLM
+    participant Repo as Project files
     participant Git
 
     User->>Agent: start a session
-    Agent->>Hooks: SessionStart (bootstrap.sh)
-    Hooks-)Annotate: start in the background
-    Hooks-->>Agent: returns at once
-    Annotate->>DG: cargo build, if its sources changed
-    Annotate->>Git: set up and verify the clean/smudge filter
-    Annotate->>DG: build --notes --headers
-    DG->>Repo: tidy notes, write @sourcemap blocks<br/>(graph.json goes to ~/.qwen/sourcemap)
-    Annotate->>Git: git add files whose only change is the block
-    loop each batch of 10 files without a current note
-        Annotate->>LLM: read the files, describe each
-        LLM-->>Annotate: path + one-sentence context
-        Annotate->>DG: set-notes
+    Agent->>Hooks: SessionStart
+    activate Hooks
+    Hooks-)BG: spawn background task
+    Hooks-->>Agent: return at once
+    deactivate Hooks
+
+    activate BG
+    BG->>DG: build deepgraph if not yet
+    DG->>DG: Creates or updates Graph
+    DG->>Repo: write @sourcemap blocks
+    BG->>Git: set up clean and smudge filter
+
+    opt LLM annotation enabled
+        BG-)LLM: batch up to 10 files without note or with stale note
+        LLM-->>BG: path + one-sentence context
+        BG->>DG: set-notes
         DG->>Repo: notes.jsonl
     end
-    Note over Annotate,LLM: a file that fails 2 runs is skipped until it changes
+    deactivate BG
 
     User->>Agent: prompt
-    Agent->>Hooks: UserPromptSubmit (hint.sh, first prompt only)
-    Hooks-->>Agent: hint: grep @ctx:.*(words), check @dependents
-    Agent->>Repo: grep "@ctx:.*(aircraft)" gives one line per file
-    Agent->>Repo: read and edit the relevant files
-    Agent->>Hooks: Stop (sync-stale.sh), end of the turn
-    alt git status shows changes
-        Hooks->>DG: build --notes --headers
-        DG->>Repo: update the blocks of changed files and their dependents
-        Hooks->>Git: refresh the index for block-only changes
-        Hooks-)Annotate: start in the background, if a file needs a note
+    Agent->>Hooks: First UserPromptSubmit
+    Hooks-->>Agent: system reminder grep hint
+    Agent->>Repo: context grep
+    Repo-->>Agent: matches
+    alt no matches or query failed
+        Agent->>Repo: full grep
+        Repo-->>Agent: matches
     end
+    Agent->>Repo: read and edit the relevant files
 
-    Note over Repo,Git: git reads files through the clean filter, which strips the blocks<br/>checkout passes content through (smudge = cat)<br/>only notes.jsonl is committed
+    Agent->>Hooks: Stop
+    activate Hooks
+    Hooks->>Git: git status
+    Git-->>Hooks: changed files
+    alt git status shows changes
+        Hooks-)BG: spawn background task
+        Hooks-->>Agent: return at once
+    end
+    deactivate Hooks
+
+    activate BG
+    BG->>DG: build --notes --headers
+    DG->>DG: Updates Graph
+    DG->>Repo: update blocks of changed files
+    BG->>Git: refresh index for block-only changes
+
+    opt a file needs a note and LLM annotation = true
+        BG-)LLM: batch up to 10 files without note or with stale note
+        LLM-->>BG: path + one-sentence context
+        BG->>DG: set-notes
+        DG->>Repo: notes.jsonl
+    end
+    deactivate BG
 ```
 
 The project is the whole git repository, even when qwen is started in one of its subdirectories, so there's one set of notes per repository.
