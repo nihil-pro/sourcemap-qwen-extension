@@ -44,6 +44,7 @@ sequenceDiagram
 
     activate BG
     BG->>DG: build deepgraph if not yet
+    BG->>DG: build --headers --notes?
     DG->>DG: Creates or updates Graph
     DG->>Repo: write @sourcemap blocks
     BG->>Git: set up clean and smudge filter
@@ -78,7 +79,7 @@ sequenceDiagram
     deactivate Hooks
 
     activate BG
-    BG->>DG: build --notes --headers
+    BG->>DG: build --headers --notes?
     DG->>DG: Updates Graph
     DG->>Repo: update blocks of changed files
     BG->>Git: refresh index for block-only changes
